@@ -1,7 +1,7 @@
 // Helper quản lý auth token + user info
 
 // Base URL cho API - hỗ trợ production qua VITE_API_URL
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const BASE_URL = 'https://utt-library-backend.onrender.com';
 
 export const getToken = (): string | null =>
   localStorage.getItem('token')

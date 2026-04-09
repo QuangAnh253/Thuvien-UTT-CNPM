@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BookOpen, LogIn, Search, Users, TrendingUp, CheckCircle, Clock, Zap, FileText } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
-import { clearAuth, getUser, isLoggedIn } from '../lib/auth';
+import { clearAuth, getUser, isLoggedIn, apiFetch } from '../lib/auth';
 
 interface FeaturedBook {
   id: string;
@@ -34,9 +34,8 @@ export default function HomePage() {
   useEffect(() => {
     const fetchFeaturedBooks = async () => {
       try {
-        const res = await fetch('/api/books');
-        const data = await res.json();
-        const list = Array.isArray(data) ? data : [];
+        const res = await apiFetch('/api/books');
+        const list = (Array.isArray(res) ? res : []) || [];
 
         setFeaturedBooks(
           list.slice(0, 4).map((book: any) => ({

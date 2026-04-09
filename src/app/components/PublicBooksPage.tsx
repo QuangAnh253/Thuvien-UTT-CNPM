@@ -177,9 +177,8 @@ export default function PublicBooksPage() {
       if (searchQuery) query.append('search', searchQuery);
       if (selectedCategory !== 'Tất cả') query.append('category', selectedCategory);
 
-      const res = await fetch(`/api/books?${query.toString()}`);
-      const data = await res.json();
-      setBooks(data || []);
+      const res = await apiFetch(`/api/books?${query.toString()}`);
+      setBooks((Array.isArray(res) ? res : []) || []);
     } catch (error) {
       console.error('Lỗi fetch sách:', error);
       setBooks([]);

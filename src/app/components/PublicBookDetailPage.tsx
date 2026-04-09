@@ -88,15 +88,18 @@ export default function PublicBookDetailPage() {
       setLoading(true);
       setSuccess(false);
       try {
-        const res = await fetch(`/api/books/${id}`);
-        const data = await res.json();
-        setBook(data);
+        const res = await apiFetch(`/api/books/${id}`);
+        if (res?.error) {
+          setBook(null);
+          return;
+        }
+        setBook(res);
 
         // Fetch related books (same category)
-        if (data.category) {
-          const query = new URLSearchParams({ category: data.category });
-          const relatedRes = await fetch(`/api/books?${query.toString()}`);
-          const relatedData = await relatedRes.json();
+        if (res.category) {
+          const query = new URLSearchParams({ category: res.category });
+          const relatedRes = await apiFetch(`/api/books?${query.toString()}`);
+          const relatedData = (Array.isArray(relatedRes) ? relatedRes : []) || [];
           // Filter out current book and get first 4
           setRelatedBooks(relatedData.filter((b: Book) => b.id !== id).slice(0, 4));
         }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Search, Plus, Pencil, Trash2, AlertTriangle, X } from 'lucide-react';
 import { Link } from 'react-router';
 import AdminLayout from './AdminLayout';
+import { apiFetch } from '../lib/auth';
 
 interface Book {
   id: string | number;
@@ -63,16 +64,15 @@ export default function BooksPage() {
         }
 
         const query = params.toString();
-        const res = await fetch(`/api/books${query ? `?${query}` : ''}`);
-        const data = await res.json();
+        const res = await apiFetch(`/api/books${query ? `?${query}` : ''}`);
 
-        if (!res.ok) {
-          alert(data?.error || 'Không thể tải danh sách sách');
+        if (res?.error) {
+          alert(res.error || 'Không thể tải danh sách sách');
           setBooks([]);
           return;
         }
 
-        const bookList = Array.isArray(data) ? data : (data?.books ?? []);
+        const bookList = Array.isArray(res) ? res : (res?.books ?? []);
         setBooks(bookList);
       } catch {
         alert('Không thể kết nối tới máy chủ');
@@ -122,16 +122,15 @@ export default function BooksPage() {
       }
 
       const query = params.toString();
-      const res = await fetch(`/api/books${query ? `?${query}` : ''}`);
-      const data = await res.json();
+      const res = await apiFetch(`/api/books${query ? `?${query}` : ''}`);
 
-      if (!res.ok) {
-        alert(data?.error || 'Không thể tải danh sách sách');
+      if (res?.error) {
+        alert(res.error || 'Không thể tải danh sách sách');
         setBooks([]);
         return;
       }
 
-      const bookList = Array.isArray(data) ? data : (data?.books ?? []);
+      const bookList = Array.isArray(res) ? res : (res?.books ?? []);
       setBooks(bookList);
     } catch {
       alert('Không thể kết nối tới máy chủ');
@@ -153,18 +152,13 @@ export default function BooksPage() {
     const url = editingBook ? `/api/books/${editingBook.id}` : '/api/books';
 
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify(formData),
       });
-      const data = await res.json();
 
-      if (!res.ok) {
-        alert(data?.error || 'Không thể lưu thông tin sách');
+      if (res?.error) {
+        alert(res.error || 'Không thể lưu thông tin sách');
         return;
       }
 
@@ -189,16 +183,12 @@ export default function BooksPage() {
     }
 
     try {
-      const res = await fetch(`/api/books/${selectedBookId}`, {
+      const res = await apiFetch(`/api/books/${selectedBookId}`, {
         method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
       });
-      const data = await res.json();
 
-      if (!res.ok) {
-        alert(data?.error || 'Không thể xóa sách');
+      if (res?.error) {
+        alert(res.error || 'Không thể xóa sách');
         return;
       }
 

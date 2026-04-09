@@ -16,7 +16,7 @@ const app = express();
 // Cấu hình CORS để Frontend có thể gọi API không bị chặn
 // Hỗ trợ cả development (localhost:5173) và production (từ env)
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: true, 
   credentials: true
 }));
 app.use(express.json()); // Để Express hiểu được dữ liệu JSON gửi lên
