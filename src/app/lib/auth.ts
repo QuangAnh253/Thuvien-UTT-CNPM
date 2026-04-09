@@ -1,5 +1,8 @@
 // Helper quản lý auth token + user info
 
+// Base URL cho API - hỗ trợ production qua VITE_API_URL
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
 export const getToken = (): string | null =>
   localStorage.getItem('token')
 
@@ -20,10 +23,17 @@ export const clearAuth = () => {
 
 export const isLoggedIn = (): boolean => !!getToken()
 
+// Helper to construct full API URL
+export const getApiUrl = (path: string): string => {
+  if (path.startsWith('http')) return path;
+  return `${BASE_URL}${path}`;
+};
+
 // Wrapper fetch tự động thêm Bearer token
 export const apiFetch = async (url: string, options: RequestInit = {}) => {
   const token = getToken()
-  const res = await fetch(url, {
+  const fullUrl = getApiUrl(url)
+  const res = await fetch(fullUrl, {
     ...options,
     headers: {
       'Content-Type': 'application/json',

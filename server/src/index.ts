@@ -13,8 +13,12 @@ import reportsRoutes from './routes/reports';
 dotenv.config();
 const app = express();
 
-// Cấu hình CORS để Frontend (port 5173) có thể gọi API không bị chặn
-app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
+// Cấu hình CORS để Frontend có thể gọi API không bị chặn
+// Hỗ trợ cả development (localhost:5173) và production (từ env)
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  credentials: true
+}));
 app.use(express.json()); // Để Express hiểu được dữ liệu JSON gửi lên
 
 // Route test để kiểm tra server
@@ -31,5 +35,5 @@ app.use('/api/staff', staffRoutes);
 app.use('/api/student', studentRoutes);
 app.use('/api/reports', reportsRoutes);
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`🚀 Server đang chạy tại http://localhost:${PORT}`));
