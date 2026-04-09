@@ -1,0 +1,85 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Config {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String
+}
+
+model User {
+  id       Int      @id @default(autoincrement())
+  username String   @unique
+  password String
+  role     String   @default("student") // admin, librarian, student
+  status   String   @default("active") // active, locked
+  staff    Staff?
+  student  Student?
+  borrows  Borrow[]
+}
+
+model Staff {
+  id        Int    @id @default(autoincrement())
+  staffCode String @unique
+  fullName  String
+  position  String
+  email     String
+  phone     String @default("")
+  userId    Int    @unique
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Student {
+  id          Int      @id @default(autoincrement())
+  studentCode String   @unique
+  fullName    String
+  readerType  String
+  email       String
+  phone       String
+  address     String
+  dob         DateTime
+  userId      Int      @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Book {
+  id           Int      @id @default(autoincrement())
+  bookCode     String   @unique
+  title        String
+  author       String
+  imageUrl     String?
+  category     String
+  publisher    String
+  publishYear  Int
+  totalQty     Int
+  availableQty Int
+  borrows      Borrow[]
+}
+
+model Borrow {
+  id         Int       @id @default(autoincrement())
+  bookId     Int
+  userId     Int
+  borrowDate DateTime  @default(now())
+  dueDate    DateTime
+  returnDate DateTime?
+  status     String    @default("BORROWING") // BORROWING, RETURNED, OVERDUE
+  book       Book      @relation(fields: [bookId], references: [id])
+  user       User      @relation(fields: [userId], references: [id])
+  returnRecord ReturnRecord?
+}
+
+model ReturnRecord {
+  id              Int      @id @default(autoincrement())
+  borrowId        Int      @unique
+  returnDate      DateTime @default(now())
+  fineAmount      Float    @default(0)
+  exemptionReason String?
+  borrow          Borrow   @relation(fields: [borrowId], references: [id])
+}

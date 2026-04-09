@@ -1,0 +1,25 @@
+# 1. Thư viện siêu nặng (Tuyệt đối phải chặn)
+node_modules/
+
+# 2. File cấu hình môi trường & Bảo mật (Tuyệt đối phải chặn)
+.env
+.env.*
+!.env.example
+
+# 3. Thư mục Build của React/Vite và Node.js
+dist/
+build/
+
+# 4. Database cục bộ của SQLite (Tránh conflict và lộ data thật)
+*.db
+*.db-journal
+dev.db
+
+# 5. File hệ thống bị rác (Mac/Windows)
+.DS_Store
+Thumbs.db
+
+# 6. Log files (Rác của npm/yarn)
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

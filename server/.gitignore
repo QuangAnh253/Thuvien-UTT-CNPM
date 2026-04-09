@@ -1,0 +1,18 @@
+# Thư viện
+node_modules/
+
+# Build thư mục (khi compile TypeScript)
+dist/
+build/
+
+# File cấu hình môi trường
+.env
+
+# Database SQLite cục bộ (Cực kỳ quan trọng để không push data test lên Github)
+*.db
+*.db-journal
+dev.db
+
+# Log lỗi
+npm-debug.log*
+yarn-error.log*
