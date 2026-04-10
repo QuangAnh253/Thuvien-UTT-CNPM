@@ -127,7 +127,7 @@ export default function AdminLayout({ children, pageTitle }: AdminLayoutProps) {
         <div className="p-6 border-b border-white/10">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full overflow-hidden bg-white/10">
-              <img src='../../../public/LogoUTT_square.png' alt="UTT Logo" className="w-full h-full object-cover" />
+              <img src='/LogoUTT_square_blue.png' alt="UTT Logo" className="w-full h-full object-cover" />
             </div>
             <div>
               <h2 className="text-white">UTT Library</h2>
