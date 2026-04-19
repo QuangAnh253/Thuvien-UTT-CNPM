@@ -19,6 +19,7 @@ model User {
   password String
   role     String   @default("student") // admin, librarian, student
   status   String   @default("active") // active, locked
+  createdAt DateTime @default(now())
   staff    Staff?
   student  Student?
   borrows  Borrow[]
@@ -54,6 +55,7 @@ model Book {
   title        String
   author       String
   imageUrl     String?
+  description  String?
   category     String
   publisher    String
   publishYear  Int
