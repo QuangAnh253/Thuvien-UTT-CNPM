@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
 import { authenticateToken } from '../middleware/auth';
-import { sendRegisterOtpEmail } from '../lib/email';
+import { sendRegisterOtpEmail, sendResetPasswordOtpEmail } from '../lib/email';
 
 const router = express.Router();
 
@@ -12,6 +12,9 @@ const buildPreferenceKey = (userId: number, scope: string) => `pref:${userId}:${
 const REGISTER_OTP_EXPIRES_SECONDS = 300;
 const REGISTER_OTP_MAX_ATTEMPTS = 5;
 const buildRegisterOtpKey = (otpId: string) => `otp:register:${otpId}`;
+const RESET_PASSWORD_OTP_EXPIRES_SECONDS = 300;
+const RESET_PASSWORD_OTP_MAX_ATTEMPTS = 5;
+const buildResetPasswordOtpKey = (resetId: string) => `otp:reset-password:${resetId}`;
 const USERNAME_REGEX = /^(?=.{6,20}$)(?!.*[._]{2})(?!.*[._]$)[a-z][a-z0-9._]*$/;
 const RESERVED_USERNAMES = new Set(['admin', 'root', 'system', 'support', 'null', 'undefined']);
 
@@ -35,6 +38,38 @@ const validateUsername = (value: any): string | null => {
 };
 
 const generateOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
+
+const getAccountEmail = (user: any) => normalizeEmail(user?.student?.email || user?.staff?.email || '');
+
+const maskEmail = (email: string) => {
+  const normalized = normalizeEmail(email);
+  const [localPart, domainPart] = normalized.split('@');
+
+  if (!localPart || !domainPart) {
+    return normalized;
+  }
+
+  if (localPart.length <= 2) {
+    return `${localPart[0] || '*'}***@${domainPart}`;
+  }
+
+  return `${localPart.slice(0, 2)}***@${domainPart}`;
+};
+
+const findUserForPasswordResetByEmail = async (email: string) => {
+  return prisma.user.findFirst({
+    where: {
+      OR: [
+        { student: { email: { equals: email, mode: 'insensitive' } } },
+        { staff: { email: { equals: email, mode: 'insensitive' } } },
+      ],
+    },
+    include: {
+      student: true,
+      staff: true,
+    },
+  });
+};
 
 const readPreferenceIds = async (userId: number, scope: string): Promise<string[]> => {
   const key = buildPreferenceKey(userId, scope);
@@ -350,6 +385,215 @@ router.post('/register', async (req, res): Promise<any> => {
   } catch (error) {
     console.error('Register error:', error);
     res.status(500).json({ error: 'Loi server khi dang ky' });
+  }
+});
+
+router.post('/forgot-password/request', async (req, res): Promise<any> => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+
+    if (!email) {
+      return res.status(400).json({ error: 'Vui lòng nhập email' });
+    }
+
+    const user = await findUserForPasswordResetByEmail(email);
+    if (!user) {
+      return res.status(404).json({ error: 'Không tìm thấy tài khoản phù hợp' });
+    }
+
+    const targetEmail = getAccountEmail(user);
+    if (!targetEmail) {
+      return res.status(400).json({ error: 'Tài khoản này chưa có email liên kết' });
+    }
+
+    const resetId = crypto.randomUUID();
+    const otpCode = generateOtpCode();
+    const expiresAt = Date.now() + RESET_PASSWORD_OTP_EXPIRES_SECONDS * 1000;
+    const key = buildResetPasswordOtpKey(resetId);
+
+    await prisma.config.create({
+      data: {
+        key,
+        value: JSON.stringify({
+          userId: user.id,
+          email: targetEmail,
+          code: otpCode,
+          attempts: 0,
+          expiresAt,
+          verified: false,
+        }),
+      },
+    });
+
+    let emailSent = false;
+    try {
+      const mailResult = await sendResetPasswordOtpEmail({
+        to: targetEmail,
+        otpCode,
+        expiresInSeconds: RESET_PASSWORD_OTP_EXPIRES_SECONDS,
+      });
+      emailSent = mailResult.sent;
+    } catch (mailError) {
+      console.error('Send reset OTP via Resend failed:', mailError);
+    }
+
+    if (!emailSent) {
+      console.log(`[RESET OTP][DEV FALLBACK] ${targetEmail}: ${otpCode}`);
+    }
+
+    return res.json({
+      message: emailSent
+        ? 'Đã gửi mã OTP đặt lại mật khẩu, vui lòng kiểm tra email.'
+        : 'Đã tạo mã OTP đặt lại mật khẩu. Môi trường hiện tại chưa gửi email thực tế.',
+      resetId,
+      maskedEmail: maskEmail(targetEmail),
+      expiresIn: RESET_PASSWORD_OTP_EXPIRES_SECONDS,
+      ...(process.env.NODE_ENV === 'production' || emailSent ? {} : { devOtp: otpCode }),
+    });
+  } catch (error) {
+    console.error('Forgot password request error:', error);
+    return res.status(500).json({ error: 'Lỗi server khi gửi OTP đặt lại mật khẩu' });
+  }
+});
+
+router.post('/forgot-password/verify', async (req, res): Promise<any> => {
+  try {
+    const resetId = String(req.body?.resetId || '').trim();
+    const otpCode = String(req.body?.otpCode || '').trim();
+
+    if (!resetId || !otpCode) {
+      return res.status(400).json({ error: 'Vui lòng nhập đầy đủ mã OTP' });
+    }
+
+    const resetKey = buildResetPasswordOtpKey(resetId);
+    const resetConfig = await prisma.config.findUnique({ where: { key: resetKey } });
+    if (!resetConfig?.value) {
+      return res.status(400).json({ error: 'OTP không hợp lệ hoặc đã hết hạn' });
+    }
+
+    let resetPayload: {
+      userId: number;
+      email: string;
+      code: string;
+      attempts: number;
+      expiresAt: number;
+      verified: boolean;
+    };
+
+    try {
+      resetPayload = JSON.parse(resetConfig.value);
+    } catch {
+      await prisma.config.deleteMany({ where: { key: resetKey } });
+      return res.status(400).json({ error: 'OTP không hợp lệ hoặc đã hết hạn' });
+    }
+
+    if (Date.now() > Number(resetPayload.expiresAt || 0)) {
+      await prisma.config.deleteMany({ where: { key: resetKey } });
+      return res.status(400).json({ error: 'Mã OTP đã hết hạn. Vui lòng gửi lại OTP mới.' });
+    }
+
+    if (String(otpCode).trim() !== String(resetPayload.code || '').trim()) {
+      const nextAttempts = Number(resetPayload.attempts || 0) + 1;
+
+      if (nextAttempts >= RESET_PASSWORD_OTP_MAX_ATTEMPTS) {
+        await prisma.config.deleteMany({ where: { key: resetKey } });
+        return res.status(400).json({ error: 'OTP không đúng. Bạn đã hết lượt thử, vui lòng gửi lại OTP.' });
+      }
+
+      await prisma.config.update({
+        where: { key: resetKey },
+        data: {
+          value: JSON.stringify({
+            ...resetPayload,
+            attempts: nextAttempts,
+          }),
+        },
+      });
+
+      return res.status(400).json({ error: `OTP không đúng. Còn ${RESET_PASSWORD_OTP_MAX_ATTEMPTS - nextAttempts} lượt thử.` });
+    }
+
+    await prisma.config.update({
+      where: { key: resetKey },
+      data: {
+        value: JSON.stringify({
+          ...resetPayload,
+          verified: true,
+          attempts: Number(resetPayload.attempts || 0),
+          verifiedAt: Date.now(),
+        }),
+      },
+    });
+
+    return res.json({ message: 'OTP hợp lệ' });
+  } catch (error) {
+    console.error('Forgot password verify error:', error);
+    return res.status(500).json({ error: 'Lỗi server khi xác thực OTP' });
+  }
+});
+
+router.post('/forgot-password/confirm', async (req, res): Promise<any> => {
+  try {
+    const resetId = String(req.body?.resetId || '').trim();
+    const newPassword = String(req.body?.newPassword || '').trim();
+
+    if (!resetId || !newPassword) {
+      return res.status(400).json({ error: 'Vui lòng nhập mật khẩu mới' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'Mật khẩu phải có ít nhất 6 ký tự' });
+    }
+
+    const resetKey = buildResetPasswordOtpKey(resetId);
+    const resetConfig = await prisma.config.findUnique({ where: { key: resetKey } });
+    if (!resetConfig?.value) {
+      return res.status(400).json({ error: 'Phiên đặt lại mật khẩu không hợp lệ hoặc đã hết hạn' });
+    }
+
+    let resetPayload: {
+      userId: number;
+      email: string;
+      code: string;
+      attempts: number;
+      expiresAt: number;
+      verified: boolean;
+    };
+
+    try {
+      resetPayload = JSON.parse(resetConfig.value);
+    } catch {
+      await prisma.config.deleteMany({ where: { key: resetKey } });
+      return res.status(400).json({ error: 'Phiên đặt lại mật khẩu không hợp lệ hoặc đã hết hạn' });
+    }
+
+    if (Date.now() > Number(resetPayload.expiresAt || 0)) {
+      await prisma.config.deleteMany({ where: { key: resetKey } });
+      return res.status(400).json({ error: 'Phiên đặt lại mật khẩu đã hết hạn' });
+    }
+
+    if (!resetPayload.verified) {
+      return res.status(400).json({ error: 'Vui lòng xác thực OTP trước khi đặt lại mật khẩu' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: Number(resetPayload.userId) } });
+    if (!user) {
+      await prisma.config.deleteMany({ where: { key: resetKey } });
+      return res.status(404).json({ error: 'Không tìm thấy tài khoản cần đặt lại mật khẩu' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { password: hashedPassword },
+    });
+
+    await prisma.config.deleteMany({ where: { key: resetKey } });
+
+    return res.json({ message: 'Đặt lại mật khẩu thành công!' });
+  } catch (error) {
+    console.error('Forgot password confirm error:', error);
+    return res.status(500).json({ error: 'Lỗi server khi đặt lại mật khẩu' });
   }
 });
 

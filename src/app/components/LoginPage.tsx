@@ -152,16 +152,12 @@ export default function LoginPage() {
             </button>
 
             <div className="text-center mb-4">
-              <a
-                href="#"
+              <Link
+                to="/forgot-password"
                 className="text-[#f79421] hover:text-[#e68414] hover:underline"
-                onClick={(e) => {
-                  e.preventDefault();
-                  alert('Chức năng đang phát triển');
-                }}
               >
                 Quên mật khẩu?
-              </a>
+              </Link>
             </div>
 
             <div className="relative mb-4">

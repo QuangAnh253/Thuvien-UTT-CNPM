@@ -8,8 +8,10 @@ const envApiUrl = String(import.meta.env.VITE_API_URL || '').trim();
 const isBrowser = typeof window !== 'undefined';
 const isLocalBrowser =
   isBrowser && /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
+const isLocalApiUrl = (value: string) =>
+  /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(value);
 const fallbackApiUrl = isLocalBrowser ? 'http://localhost:3001' : '';
-const BASE_URL = (envApiUrl || fallbackApiUrl).replace(/\/+$/, '');
+const BASE_URL = ((isLocalBrowser && !isLocalApiUrl(envApiUrl) ? fallbackApiUrl : envApiUrl) || fallbackApiUrl).replace(/\/+$/, '');
 
 export const getToken = (): string | null =>
   localStorage.getItem('token')

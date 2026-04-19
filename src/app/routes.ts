@@ -4,6 +4,7 @@ import ProtectedRoute from './lib/ProtectedRoute';
 import HomePage from './components/HomePage';
 import AboutPage from './components/AboutPage';
 import LoginPage from './components/LoginPage';
+import ForgotPasswordPage from './components/ForgotPasswordPage';
 import RegisterPage from './components/RegisterPage';
 import AdminDashboard from './components/AdminDashboard';
 import AdminProfilePage from './components/AdminProfilePage';
@@ -38,6 +39,10 @@ export const router = createBrowserRouter([
   {
     path: '/login',
     Component: LoginPage,
+  },
+  {
+    path: '/forgot-password',
+    Component: ForgotPasswordPage,
   },
   {
     path: '/register',
