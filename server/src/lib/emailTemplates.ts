@@ -152,6 +152,7 @@ const formatDateTimeVi = (value: Date | string) => {
   if (Number.isNaN(date.getTime())) return '-';
 
   return date.toLocaleString('vi-VN', {
+    timeZone: 'Asia/Ho_Chi_Minh',
     hour12: false,
     year: 'numeric',
     month: '2-digit',
@@ -177,7 +178,7 @@ export const buildBorrowRequestEmailTemplate = (params: {
     ``,
     `Bạn đã đăng ký mượn sách thành công.`,
     `Tên sách: ${bookTitle}`,
-    `Hạn đến thư viện nhận sách: ${pickupDeadlineText}`,
+    `Hạn đến thư viện nhận sách trước: ${pickupDeadlineText}`,
     ``,
     `Vui lòng đến nhận sách đúng hạn.`,
   ].join('\n');
@@ -217,7 +218,7 @@ export const buildBorrowRequestEmailTemplate = (params: {
             </p>
 
             <p style="margin:12px 0;">
-              <strong>Hạn đến thư viện nhận sách:</strong><br>
+              <strong>Hạn đến thư viện nhận sách trước:</strong><br>
               ${pickupDeadlineText}
             </p>
 
