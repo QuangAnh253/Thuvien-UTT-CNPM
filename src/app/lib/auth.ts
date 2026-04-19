@@ -31,6 +31,13 @@ export const clearAuth = () => {
 
 export const isLoggedIn = (): boolean => !!getToken()
 
+const redirectToLogin = () => {
+  clearAuth()
+  if (isBrowser) {
+    window.location.assign('/login')
+  }
+}
+
 // Helper to construct full API URL
 export const getApiUrl = (path: string): string => {
   if (path.startsWith('http')) return path;
@@ -52,8 +59,7 @@ export const apiFetch = async (url: string, options: RequestInit = {}) => {
 
   // Auto logout nếu token hết hạn
   if (res.status === 401) {
-    clearAuth()
-    window.location.href = '/login'
+    redirectToLogin()
     return { error: 'Phiên đăng nhập hết hạn' }
   }
 
@@ -79,6 +85,18 @@ export const apiFetch = async (url: string, options: RequestInit = {}) => {
       if (data.includes('<!DOCTYPE html')) {
         return { error: `API trả về lỗi HTTP ${res.status}. Vui lòng kiểm tra backend đã deploy đúng phiên bản.` }
       }
+    }
+
+    const errorText = typeof data === 'string' ? data : JSON.stringify(data || {})
+    const authFailurePattern = /phiên đăng nhập không hợp lệ|đã hết hạn|chưa xác thực|invalid token|jwt|không tìm thấy token|token/i
+    const permissionDeniedPattern = /không có quyền|không được phép|forbidden/i
+    const shouldLogout =
+      res.status === 401 ||
+      (res.status === 403 && authFailurePattern.test(errorText) && !permissionDeniedPattern.test(errorText))
+
+    if (shouldLogout) {
+      redirectToLogin()
+      return { error: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn' }
     }
 
     if (data && typeof data === 'object' && 'error' in data) {
