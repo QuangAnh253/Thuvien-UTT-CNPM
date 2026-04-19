@@ -238,7 +238,7 @@ router.post('/register/send-otp', async (req, res): Promise<any> => {
 router.post('/register', async (req, res): Promise<any> => {
   try {
     const username = normalizeUsername(req.body?.username);
-    const { password, fullName, studentCode, email, phone, otpId, otpCode } = req.body;
+    const { password, fullName, studentCode, email, phone, address, otpId, otpCode } = req.body;
     const normalizedEmail = normalizeEmail(email);
 
     const usernameError = validateUsername(username);
@@ -337,7 +337,7 @@ router.post('/register', async (req, res): Promise<any> => {
             email: normalizedEmail,
             phone: phone || '',
             readerType: 'student',
-            address: '', // Co the cho cap nhat sau o trang Profile
+            address: String(address || '').trim(),
             dob: new Date('2000-01-01'), // Mac dinh, cap nhat sau
           },
         },

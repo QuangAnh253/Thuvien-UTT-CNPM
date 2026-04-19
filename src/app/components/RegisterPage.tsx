@@ -137,7 +137,7 @@ export default function RegisterPage() {
     e.preventDefault();
     setError('');
 
-    if (!formData.username || !formData.password || !formData.fullName || !formData.studentCode) {
+    if (!formData.username || !formData.password || !formData.fullName || !formData.studentCode || !formData.phone || !formData.address) {
       setError('Vui lòng nhập đủ các trường bắt buộc');
       return;
     }
@@ -224,6 +224,7 @@ export default function RegisterPage() {
           studentCode: formData.studentCode,
           email: formData.email,
           phone: formData.phone,
+          address: formData.address,
           otpId,
           otpCode,
         }),

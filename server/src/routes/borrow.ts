@@ -4,6 +4,270 @@ import { authenticateToken } from '../middleware/auth';
 
 const router = express.Router();
 const buildAvatarKey = (userId: number) => `avatar:${userId}`;
+const DEFAULT_WORK_START_HOUR = 8;
+const DEFAULT_WORK_START_MINUTE = 0;
+const DEFAULT_WORK_END_HOUR = 18;
+const DEFAULT_WORK_END_MINUTE = 30;
+const WORK_CLOSE_WEEKENDS_KEY = 'work_close_weekends';
+const WORK_START_TIME_KEY = 'work_start_time';
+const WORK_END_TIME_KEY = 'work_end_time';
+
+type ReaderBorrowPolicy = {
+  label: 'student' | 'lecturer';
+  maxActiveBorrows: number;
+  pendingExpiryLockThreshold: number;
+  pickupWaitHours: number;
+  borrowDurationDays: number;
+  renewalWindowDays: number;
+  renewalDurationDays: number;
+};
+
+const BORROW_POLICIES: Record<'student' | 'lecturer', ReaderBorrowPolicy> = {
+  student: {
+    label: 'student',
+    maxActiveBorrows: 5,
+    pendingExpiryLockThreshold: 5,
+    pickupWaitHours: 24,
+    borrowDurationDays: 14,
+    renewalWindowDays: 3,
+    renewalDurationDays: 7,
+  },
+  lecturer: {
+    label: 'lecturer',
+    maxActiveBorrows: 10,
+    pendingExpiryLockThreshold: 10,
+    pickupWaitHours: 48,
+    borrowDurationDays: 60,
+    renewalWindowDays: 7,
+    renewalDurationDays: 14,
+  },
+};
+
+const normalizeReaderType = (value: any): 'student' | 'lecturer' => {
+  const raw = String(value || '').trim().toLowerCase();
+  return raw === 'lecturer' ? 'lecturer' : 'student';
+};
+
+const getPolicyByReaderType = (readerType: any): ReaderBorrowPolicy => {
+  return BORROW_POLICIES[normalizeReaderType(readerType)];
+};
+
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const toDateKey = (date: Date) => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const isWeekend = (date: Date) => {
+  const day = date.getDay();
+  return day === 0 || day === 6;
+};
+
+const parseHolidayDateSet = (raw: string): Set<string> => {
+  return new Set(
+    raw
+      .split(/[\n,;]+/)
+      .map((item) => item.trim())
+      .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item))
+  );
+};
+
+const parseBooleanValue = (value: unknown, fallback: boolean) => {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(raw)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(raw)) return false;
+  return fallback;
+};
+
+const parseTimeToParts = (value: unknown, fallbackHour: number, fallbackMinute: number) => {
+  const raw = String(value || '').trim();
+  const matched = raw.match(/^(\d{2}):(\d{2})$/);
+  if (!matched) {
+    return { hour: fallbackHour, minute: fallbackMinute };
+  }
+
+  const hour = Number(matched[1]);
+  const minute = Number(matched[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return { hour: fallbackHour, minute: fallbackMinute };
+  }
+
+  return { hour, minute };
+};
+
+const dateToDateKey = (value: Date) => {
+  const date = new Date(value);
+  return toDateKey(new Date(date.getFullYear(), date.getMonth(), date.getDate()));
+};
+
+type WorkingCalendarSettings = {
+  holidayDateSet: Set<string>;
+  closeOnWeekends: boolean;
+  workStartHour: number;
+  workStartMinute: number;
+  workEndHour: number;
+  workEndMinute: number;
+};
+
+const getWorkingCalendarSettings = async (): Promise<WorkingCalendarSettings> => {
+  const envRaw = String(process.env.HOLIDAY_DATES || '').trim();
+  const envHolidays = parseHolidayDateSet(envRaw);
+  const configRows = await prisma.config.findMany({
+    where: { key: { in: [WORK_CLOSE_WEEKENDS_KEY, WORK_START_TIME_KEY, WORK_END_TIME_KEY] } },
+  });
+  const configMap = new Map(configRows.map((row) => [row.key, row.value]));
+
+  const dbHolidays: Array<{ date: Date }> = await (prisma as any).holiday.findMany({
+    select: { date: true },
+  });
+  const dbHolidaySet: Set<string> = new Set(dbHolidays.map((item) => dateToDateKey(item.date)));
+
+  const closeOnWeekends = parseBooleanValue(configMap.get(WORK_CLOSE_WEEKENDS_KEY), true);
+  const startTime = parseTimeToParts(
+    configMap.get(WORK_START_TIME_KEY),
+    DEFAULT_WORK_START_HOUR,
+    DEFAULT_WORK_START_MINUTE
+  );
+  const endTime = parseTimeToParts(
+    configMap.get(WORK_END_TIME_KEY),
+    DEFAULT_WORK_END_HOUR,
+    DEFAULT_WORK_END_MINUTE
+  );
+
+  return {
+    holidayDateSet: new Set([...envHolidays, ...dbHolidaySet]),
+    closeOnWeekends,
+    workStartHour: startTime.hour,
+    workStartMinute: startTime.minute,
+    workEndHour: endTime.hour,
+    workEndMinute: endTime.minute,
+  };
+};
+
+const isNonWorkingDay = (date: Date, holidayDateSet: Set<string>, closeOnWeekends: boolean) => {
+  return (closeOnWeekends && isWeekend(date)) || holidayDateSet.has(toDateKey(date));
+};
+
+const clampToWorkingHours = (date: Date, settings: WorkingCalendarSettings) => {
+  const clamped = new Date(date);
+  const hours = clamped.getHours();
+  const minutes = clamped.getMinutes();
+
+  if (hours < settings.workStartHour || (hours === settings.workStartHour && minutes < settings.workStartMinute)) {
+    clamped.setHours(settings.workStartHour, settings.workStartMinute, 0, 0);
+    return clamped;
+  }
+
+  if (hours > settings.workEndHour || (hours === settings.workEndHour && minutes > settings.workEndMinute)) {
+    clamped.setHours(settings.workEndHour, settings.workEndMinute, 0, 0);
+  }
+
+  return clamped;
+};
+
+const moveToNextWorkingDayAtStart = (date: Date, settings: WorkingCalendarSettings) => {
+  const next = new Date(date);
+  while (isNonWorkingDay(next, settings.holidayDateSet, settings.closeOnWeekends)) {
+    next.setDate(next.getDate() + 1);
+  }
+  next.setHours(settings.workStartHour, settings.workStartMinute, 0, 0);
+  return next;
+};
+
+const countNonWorkingDaysBetween = (fromDate: Date, toDate: Date, settings: WorkingCalendarSettings) => {
+  const start = toStartOfDay(fromDate);
+  const end = toStartOfDay(toDate);
+  let cursor = addDays(start, 1);
+  let count = 0;
+
+  while (cursor.getTime() <= end.getTime()) {
+    if (isNonWorkingDay(cursor, settings.holidayDateSet, settings.closeOnWeekends)) {
+      count += 1;
+    }
+    cursor = addDays(cursor, 1);
+  }
+
+  return count;
+};
+
+const addCalendarHoursWithNonWorkingOffset = (fromDate: Date, hours: number, settings: WorkingCalendarSettings) => {
+  let target = new Date(fromDate.getTime() + hours * 60 * 60 * 1000);
+
+  while (true) {
+    const nonWorkingDays = countNonWorkingDaysBetween(fromDate, target, settings);
+    const shifted = addDays(new Date(fromDate.getTime() + hours * 60 * 60 * 1000), nonWorkingDays);
+
+    if (shifted.getTime() === target.getTime()) {
+      break;
+    }
+
+    target = shifted;
+  }
+
+  target = clampToWorkingHours(target, settings);
+  if (isNonWorkingDay(target, settings.holidayDateSet, settings.closeOnWeekends)) {
+    target = moveToNextWorkingDayAtStart(target, settings);
+  }
+
+  return target;
+};
+
+const addWorkingDays = (fromDate: Date, workingDays: number, settings: WorkingCalendarSettings) => {
+  const target = new Date(fromDate);
+  let remaining = Math.max(0, Number(workingDays || 0));
+
+  while (remaining > 0) {
+    target.setDate(target.getDate() + 1);
+    if (!isNonWorkingDay(target, settings.holidayDateSet, settings.closeOnWeekends)) {
+      remaining -= 1;
+    }
+  }
+
+  return target;
+};
+
+const expireUserPendingRequestsIfNeeded = async (userId: number, policy: ReaderBorrowPolicy) => {
+  const now = new Date();
+  const expiredPending = await prisma.borrow.findMany({
+    where: {
+      userId,
+      status: 'PENDING',
+      dueDate: { lt: now },
+    },
+    select: { id: true },
+  });
+
+  if (expiredPending.length > 0) {
+    await prisma.borrow.updateMany({
+      where: { id: { in: expiredPending.map((item) => item.id) } },
+      data: { status: 'EXPIRED' },
+    });
+  }
+
+  const expiredCount = await prisma.borrow.count({
+    where: {
+      userId,
+      status: 'EXPIRED',
+    },
+  });
+
+  if (expiredCount >= policy.pendingExpiryLockThreshold) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { status: 'locked' },
+    });
+    return { locked: true, expiredCount };
+  }
+
+  return { locked: false, expiredCount };
+};
 
 const getAvatarUrl = async (userId: number) => {
   const key = buildAvatarKey(userId);
@@ -16,7 +280,7 @@ const toStartOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(
 // 1. TẠO PHIẾU MƯỢN MỚI (Admin/Librarian thực hiện tại quầy)
 router.post('/', authenticateToken, async (req: any, res: any) => {
   try {
-    const { studentId, bookId, days } = req.body;
+    const { studentId, bookId } = req.body;
 
     const borrowerId = Number(studentId);
     if (Number.isNaN(borrowerId)) {
@@ -29,7 +293,21 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
     });
 
     if (!borrower || borrower.role !== 'student' || !borrower.student) {
-      return res.status(400).json({ error: 'Chỉ sinh viên mới được mượn sách' });
+      return res.status(400).json({ error: 'Không tìm thấy độc giả hợp lệ' });
+    }
+
+    const policy = getPolicyByReaderType(borrower.student.readerType);
+    const workingCalendar = await getWorkingCalendarSettings();
+
+    const pendingResult = await expireUserPendingRequestsIfNeeded(borrowerId, policy);
+    if (pendingResult.locked) {
+      return res.status(403).json({
+        error: 'Tài khoản đã bị khóa do số lần yêu cầu mượn quá hạn vượt ngưỡng cho phép',
+      });
+    }
+
+    if (borrower.status === 'locked') {
+      return res.status(403).json({ error: 'Tài khoản độc giả đang bị khóa' });
     }
 
     // Kiểm tra sách còn sẵn không
@@ -38,16 +316,32 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
       return res.status(400).json({ error: 'Sách đã hết trong kho' });
     }
 
-    // Kiểm tra sinh viên có đang mượn quá hạn hoặc quá số lượng không (FR-11)
-    const activeBorrows = await prisma.borrow.count({
-      where: { userId: borrowerId, status: 'BORROWING' }
+    const todayStart = toStartOfDay(new Date());
+
+    const overdueBooks = await prisma.borrow.count({
+      where: {
+        userId: borrowerId,
+        status: 'BORROWING',
+        dueDate: { lt: todayStart },
+      },
     });
-    if (activeBorrows >= 5) {
-      return res.status(400).json({ error: 'Sinh viên đã mượn tối đa 5 cuốn sách' });
+    if (overdueBooks > 0) {
+      return res.status(400).json({ error: 'Độc giả đang có sách quá hạn, không thể mượn thêm' });
     }
 
-    const dueDate = new Date();
-    dueDate.setDate(dueDate.getDate() + (days || 14));
+    const activeBorrows = await prisma.borrow.count({
+      where: {
+        userId: borrowerId,
+        status: { in: ['BORROWING', 'PENDING'] },
+      },
+    });
+    if (activeBorrows >= policy.maxActiveBorrows) {
+      return res.status(400).json({
+        error: `Độc giả đã đạt giới hạn mượn tối đa (${policy.maxActiveBorrows} cuốn, gồm cả chờ duyệt)`,
+      });
+    }
+
+    const dueDate = addWorkingDays(new Date(), policy.borrowDurationDays, workingCalendar);
 
     // Thực hiện Transaction: Tạo phiếu mượn + Trừ số lượng sách
     const result = await prisma.$transaction([
@@ -56,7 +350,8 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
           userId: borrowerId,
           bookId: bookId,
           dueDate: dueDate,
-          status: 'BORROWING'
+          status: 'BORROWING',
+          extensionCount: 0,
         }
       }),
       prisma.book.update({
@@ -81,6 +376,26 @@ router.post('/request', authenticateToken, async (req: any, res: any) => {
       return res.status(403).json({ error: 'Chỉ sinh viên mới được tự mượn sách' });
     }
 
+    const borrower = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { student: true },
+    });
+
+    if (!borrower || !borrower.student) {
+      return res.status(400).json({ error: 'Không tìm thấy hồ sơ độc giả' });
+    }
+
+    const policy = getPolicyByReaderType(borrower.student.readerType);
+    const workingCalendar = await getWorkingCalendarSettings();
+
+    const pendingResult = await expireUserPendingRequestsIfNeeded(userId, policy);
+    if (pendingResult.locked || borrower.status === 'locked') {
+      return res.status(403).json({
+        error: 'Tài khoản đã bị khóa do số lần yêu cầu mượn quá hạn vượt ngưỡng cho phép',
+        status: 'locked',
+      });
+    }
+
     const todayStart = toStartOfDay(new Date());
 
     // --- KIỂM TRA QUY ĐỊNH (FR-11 & FR-13) ---
@@ -96,27 +411,32 @@ router.post('/request', authenticateToken, async (req: any, res: any) => {
       return res.status(400).json({ error: 'Bạn đang có sách mượn quá hạn! Vui lòng trả sách trước khi mượn mới. (FR-13)' });
     }
 
-    // 2. Kiểm tra giới hạn số lượng sách (FR-11 - Tối đa 5 cuốn)
+    // 2. Kiểm tra giới hạn số lượng sách (bao gồm đang chờ duyệt)
     const activeBorrows = await prisma.borrow.count({
       where: {
         userId: userId,
         status: { in: ['BORROWING', 'PENDING'] }
       }
     });
-    if (activeBorrows >= 5) {
-      return res.status(400).json({ error: 'Bạn đã đạt giới hạn mượn tối đa (5 cuốn). Vui lòng trả bớt sách. (FR-11)' });
+    if (activeBorrows >= policy.maxActiveBorrows) {
+      return res.status(400).json({
+        error: `Bạn đã đạt giới hạn mượn tối đa (${policy.maxActiveBorrows} cuốn, gồm cả chờ duyệt). Vui lòng trả bớt sách.`,
+      });
     }
     // ----------------------------------------
 
     const book = await prisma.book.findUnique({ where: { id: bookId } });
     if (!book || book.availableQty <= 0) return res.status(400).json({ error: 'Sách không khả dụng' });
 
+    const pickupDeadline = addCalendarHoursWithNonWorkingOffset(new Date(), policy.pickupWaitHours, workingCalendar);
+
     const request = await prisma.borrow.create({
       data: {
         userId,
         bookId,
-        dueDate: new Date(),
-        status: 'PENDING'
+        dueDate: pickupDeadline,
+        status: 'PENDING',
+        extensionCount: 0,
       }
     });
     res.json(request);
@@ -129,18 +449,37 @@ router.post('/request', authenticateToken, async (req: any, res: any) => {
 router.put('/:id/approve', authenticateToken, async (req: any, res: any) => {
   try {
     const borrowId = Number(req.params.id);
-    const borrow = await prisma.borrow.findUnique({ where: { id: borrowId }, include: { book: true } });
+    const borrow = await prisma.borrow.findUnique({
+      where: { id: borrowId },
+      include: {
+        book: true,
+        user: { include: { student: true } },
+      },
+    });
 
     if (!borrow || borrow.status !== 'PENDING') return res.status(400).json({ error: 'Phiên không hợp lệ' });
     if (borrow.book.availableQty <= 0) return res.status(400).json({ error: 'Sách đã hết' });
 
-    const dueDate = new Date();
-    dueDate.setDate(dueDate.getDate() + 14);
+    const readerType = borrow.user?.student?.readerType;
+    const policy = getPolicyByReaderType(readerType);
+    const workingCalendar = await getWorkingCalendarSettings();
+
+    if (new Date() > new Date(borrow.dueDate)) {
+      await prisma.borrow.update({
+        where: { id: borrowId },
+        data: { status: 'EXPIRED' },
+      });
+
+      await expireUserPendingRequestsIfNeeded(borrow.userId, policy);
+      return res.status(400).json({ error: 'Yêu cầu mượn đã quá hạn nhận sách' });
+    }
+
+    const dueDate = addWorkingDays(new Date(), policy.borrowDurationDays, workingCalendar);
 
     const result = await prisma.$transaction([
       prisma.borrow.update({
         where: { id: borrowId },
-        data: { status: 'BORROWING', borrowDate: new Date(), dueDate }
+        data: { status: 'BORROWING', borrowDate: new Date(), dueDate, extensionCount: 0 }
       }),
       prisma.book.update({
         where: { id: borrow.bookId },
@@ -183,15 +522,44 @@ router.put('/:id/reject', authenticateToken, async (req: any, res: any) => {
 // 4. GIA HẠN SÁCH (FR-14)
 router.put('/:id/extend', authenticateToken, async (req: any, res: any) => {
   try {
-    const borrow = await prisma.borrow.findUnique({ where: { id: Number(req.params.id) } });
+    const todayStart = toStartOfDay(new Date());
+    const borrow = await prisma.borrow.findUnique({
+      where: { id: Number(req.params.id) },
+      include: { user: { include: { student: true } } },
+    });
+
     if (!borrow || borrow.status !== 'BORROWING') return res.status(400).json({ error: 'Không thể gia hạn' });
+    if (borrow.returnDate) return res.status(400).json({ error: 'Sách đã trả, không thể gia hạn' });
+
+    const policy = getPolicyByReaderType(borrow.user?.student?.readerType);
+    const workingCalendar = await getWorkingCalendarSettings();
+    const dueDateStart = toStartOfDay(new Date(borrow.dueDate));
+
+    if (dueDateStart.getTime() < todayStart.getTime()) {
+      return res.status(400).json({ error: 'Sách đã quá hạn, không được phép gia hạn' });
+    }
+
+    const extensionCount = Number((borrow as any).extensionCount || 0);
+    if (extensionCount >= 2) {
+      return res.status(400).json({ error: 'Đã đạt số lần gia hạn tối đa (2 lần)' });
+    }
+
+    const renewalWindowStart = addDays(dueDateStart, -policy.renewalWindowDays);
+    if (todayStart.getTime() < renewalWindowStart.getTime() || todayStart.getTime() > dueDateStart.getTime()) {
+      return res.status(400).json({
+        error: `Chỉ được gia hạn trong khoảng ${policy.renewalWindowDays} ngày trước hạn trả đến hết ngày hạn trả`,
+      });
+    }
 
     const newDueDate = new Date(borrow.dueDate);
-    newDueDate.setDate(newDueDate.getDate() + 7); // Gia hạn thêm 7 ngày
+    const extendedDueDate = addWorkingDays(newDueDate, policy.renewalDurationDays, workingCalendar);
 
     const updated = await prisma.borrow.update({
       where: { id: borrow.id },
-      data: { dueDate: newDueDate }
+      data: {
+        dueDate: extendedDueDate,
+        extensionCount: { increment: 1 },
+      }
     });
     res.json(updated);
   } catch (error) {

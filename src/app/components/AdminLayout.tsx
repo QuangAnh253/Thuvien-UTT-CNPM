@@ -12,6 +12,7 @@ import {
   BookCheck,
   UserCog,
   FileText,
+  CalendarDays,
   LogOut,
   UserCircle,
   ChevronDown,
@@ -26,6 +27,7 @@ const navItems = [
   { label: 'Trả sách', icon: BookCheck, path: '/admin/return' },
   { label: 'Nhân viên', icon: UserCog, path: '/admin/staff' },
   { label: 'Báo cáo', icon: FileText, path: '/admin/reports' },
+  { label: 'Lịch làm việc', icon: CalendarDays, path: '/admin/working-calendar' },
 ];
 
 interface AdminLayoutProps {

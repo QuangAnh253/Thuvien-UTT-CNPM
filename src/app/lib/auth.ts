@@ -70,6 +70,17 @@ export const apiFetch = async (url: string, options: RequestInit = {}) => {
   }
 
   if (!res.ok) {
+    if (typeof data === 'string') {
+      const cannotGetMatch = data.match(/Cannot\s+(GET|POST|PUT|DELETE|PATCH)\s+([^<\n]+)/i)
+      if (cannotGetMatch) {
+        return { error: `API chưa hỗ trợ endpoint: ${cannotGetMatch[2].trim()}` }
+      }
+
+      if (data.includes('<!DOCTYPE html')) {
+        return { error: `API trả về lỗi HTTP ${res.status}. Vui lòng kiểm tra backend đã deploy đúng phiên bản.` }
+      }
+    }
+
     if (data && typeof data === 'object' && 'error' in data) {
       return data
     }

@@ -9,6 +9,7 @@ import returnRoutes from './routes/return';
 import staffRoutes from './routes/staff';
 import studentRoutes from './routes/student';
 import reportsRoutes from './routes/reports';
+import settingsRoutes from './routes/settings';
 import { prisma } from './lib/prisma';
 
 dotenv.config();
@@ -74,6 +75,7 @@ app.use('/api/return', returnRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/student', studentRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/settings', settingsRoutes);
 
 const PORT = process.env.PORT || 3001;
 

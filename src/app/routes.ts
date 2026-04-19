@@ -16,6 +16,7 @@ import BorrowDetailPage from './components/BorrowDetailPage';
 import ReturnPage from './components/ReturnPage';
 import StaffPage from './components/StaffPage';
 import ReportsPage from './components/ReportsPage';
+import WorkingCalendarSettingsPage from './components/WorkingCalendarSettingsPage';
 import PublicBooksPage from './components/PublicBooksPage';
 import PublicBookDetailPage from './components/PublicBookDetailPage';
 import StudentDashboard from './components/StudentDashboard';
@@ -105,5 +106,9 @@ export const router = createBrowserRouter([
   {
     path: '/admin/reports',
     element: withProtectedRoute(['admin', 'librarian'], createElement(ReportsPage)),
+  },
+  {
+    path: '/admin/working-calendar',
+    element: withProtectedRoute(['admin', 'librarian'], createElement(WorkingCalendarSettingsPage)),
   },
 ]);
