@@ -215,8 +215,7 @@ export default function PublicBookDetailPage() {
 
         extractList(pendingRequests).forEach((request: any) => {
           const requestDate = new Date(request.borrowDate || request.createdAt || Date.now());
-          const pickupDeadline = new Date(requestDate);
-          pickupDeadline.setDate(pickupDeadline.getDate() + 2);
+          const pickupDeadline = new Date(request.dueDate || requestDate);
 
           generatedNotifs.push({
             id: `pending-${request.id}`,
@@ -226,6 +225,25 @@ export default function PublicBookDetailPage() {
             message: `Bạn đã đăng ký mượn cuốn "${request.book?.title || 'N/A'}". Nhận sách trước ${formatDateTime(pickupDeadline)}.`,
             time: formatDateTime(requestDate),
             isRead: readIds.includes(`pending-${request.id}`),
+            link: '/student/dashboard',
+          });
+        });
+
+        extractList(currentBorrows).forEach((borrow: any) => {
+          const borrowDate = new Date(borrow.borrowDate);
+          const daysSinceBorrow = Math.floor((today.getTime() - borrowDate.getTime()) / (1000 * 60 * 60 * 24));
+          if (Number.isNaN(borrowDate.getTime()) || daysSinceBorrow < 0 || daysSinceBorrow > 2) {
+            return;
+          }
+
+          generatedNotifs.push({
+            id: `approved-${borrow.id}`,
+            type: 'info',
+            icon: 'book',
+            title: 'Phiếu mượn đã được duyệt',
+            message: `Cuốn "${borrow.book?.title || 'N/A'}" đã được duyệt. Ngày trả dự kiến: ${formatDateTime(borrow.dueDate)}.`,
+            time: formatDateTime(borrowDate),
+            isRead: readIds.includes(`approved-${borrow.id}`),
             link: '/student/dashboard',
           });
         });

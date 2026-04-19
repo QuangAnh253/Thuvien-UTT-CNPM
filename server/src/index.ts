@@ -11,6 +11,7 @@ import studentRoutes from './routes/student';
 import reportsRoutes from './routes/reports';
 import settingsRoutes from './routes/settings';
 import { prisma } from './lib/prisma';
+import { startBorrowReminderJob } from './lib/borrowReminderJob';
 
 dotenv.config();
 const app = express();
@@ -83,7 +84,10 @@ const startServer = async () => {
   try {
     await prisma.$connect();
     console.log('✅ Đã kết nối PostgreSQL thành công');
-    app.listen(PORT, () => console.log(`🚀 Server đang chạy tại http://localhost:${PORT}`));
+    app.listen(PORT, () => {
+      console.log(`🚀 Server đang chạy tại http://localhost:${PORT}`);
+      startBorrowReminderJob();
+    });
   } catch (error) {
     console.error('❌ Không thể kết nối PostgreSQL. Kiểm tra DATABASE_URL hoặc mạng:');
     console.error(error);

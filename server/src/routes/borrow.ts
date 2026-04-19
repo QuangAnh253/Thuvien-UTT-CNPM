@@ -1,6 +1,7 @@
 import express from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken } from '../middleware/auth';
+import { sendBorrowApprovedEmail, sendBorrowRequestEmail } from '../lib/email';
 
 const router = express.Router();
 const buildAvatarKey = (userId: number) => `avatar:${userId}`;
@@ -463,6 +464,21 @@ router.post('/request', authenticateToken, async (req: any, res: any) => {
         extensionCount: 0,
       }
     });
+
+    try {
+      const email = String(borrower.student.email || '').trim();
+      if (email) {
+        await sendBorrowRequestEmail({
+          to: email,
+          readerName: borrower.student.fullName || borrower.username,
+          bookTitle: book.title,
+          pickupDeadline,
+        });
+      }
+    } catch (mailError) {
+      console.error('Send borrow request email failed:', mailError);
+    }
+
     res.json(request);
   } catch (error) {
     res.status(500).json({ error: 'Lỗi đăng ký mượn' });
@@ -498,18 +514,36 @@ router.put('/:id/approve', authenticateToken, async (req: any, res: any) => {
       return res.status(400).json({ error: 'Yêu cầu mượn đã quá hạn nhận sách' });
     }
 
-    const dueDate = addCalendarDaysWithNonWorkingOffset(new Date(), policy.borrowDurationDays, workingCalendar);
+    const borrowStartDate = new Date();
+    const dueDate = addCalendarDaysWithNonWorkingOffset(borrowStartDate, policy.borrowDurationDays, workingCalendar);
 
     const result = await prisma.$transaction([
       prisma.borrow.update({
         where: { id: borrowId },
-        data: { status: 'BORROWING', borrowDate: new Date(), dueDate, extensionCount: 0 }
+        data: { status: 'BORROWING', borrowDate: borrowStartDate, dueDate, extensionCount: 0 }
       }),
       prisma.book.update({
         where: { id: borrow.bookId },
         data: { availableQty: { decrement: 1 } }
       })
     ]);
+
+    try {
+      const email = String(borrow.user?.student?.email || '').trim();
+      const readerName = String(borrow.user?.student?.fullName || borrow.user?.username || 'Ban doc');
+      if (email) {
+        await sendBorrowApprovedEmail({
+          to: email,
+          readerName,
+          bookTitle: borrow.book?.title || 'Sach thu vien',
+          borrowDate: borrowStartDate,
+          dueDate,
+        });
+      }
+    } catch (mailError) {
+      console.error('Send borrow approved email failed:', mailError);
+    }
+
     res.json(result[0]);
   } catch (error) {
     res.status(500).json({ error: 'Lỗi duyệt phiếu' });
