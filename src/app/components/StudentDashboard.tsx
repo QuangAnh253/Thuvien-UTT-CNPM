@@ -9,6 +9,7 @@ import { addReadNotificationId, getReadNotificationIds, saveReadNotificationIds 
 interface BorrowedBook {
   id: string;
   title: string;
+  imageUrl?: string;
   borrowDate: string;
   dueDate: string;
   daysRemaining: number;
@@ -41,6 +42,7 @@ export default function StudentDashboard() {
   const [onlineRequests, setOnlineRequests] = useState<OnlineRequest[]>([]);
   const [recentBorrows, setRecentBorrows] = useState<RecentBorrow[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [coverLoadFailed, setCoverLoadFailed] = useState<Record<string, boolean>>({});
   const [renewalModal, setRenewalModal] = useState<{ show: boolean; book: BorrowedBook | null }>({ show: false, book: null });
 
   const extractList = (res: any) => {
@@ -111,6 +113,7 @@ export default function StudentDashboard() {
   const mapCurrentBorrow = (borrow: any): BorrowedBook => ({
     id: String(borrow.id),
     title: borrow.book?.title || borrow.title || '',
+    imageUrl: borrow.book?.imageUrl || borrow.imageUrl || undefined,
     borrowDate: toDateText(borrow.borrowDate),
     dueDate: toDateText(borrow.dueDate),
     daysRemaining:
@@ -472,7 +475,17 @@ export default function StudentDashboard() {
                     className="h-40 flex items-center justify-center"
                     style={{ backgroundColor: book.coverColor }}
                   >
-                    <BookOpen className="w-12 h-12 text-white opacity-50" />
+                    {book.imageUrl && !coverLoadFailed[book.id] ? (
+                      <img
+                        src={book.imageUrl}
+                        alt={book.title}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                        onError={() => setCoverLoadFailed((prev) => ({ ...prev, [book.id]: true }))}
+                      />
+                    ) : (
+                      <BookOpen className="w-12 h-12 text-white opacity-50" />
+                    )}
                   </div>
 
                   {/* Book Info */}

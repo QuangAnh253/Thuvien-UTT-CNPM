@@ -43,8 +43,10 @@ export default function PublicBooksPage() {
   const notificationScope = 'student-notifications';
   const navigate = useNavigate();
   const location = useLocation();
-  const loggedIn = isLoggedIn();
-  const user = getUser();
+  const [authState, setAuthState] = useState(() => ({
+    loggedIn: isLoggedIn(),
+    user: getUser(),
+  }));
 
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,8 +75,16 @@ export default function PublicBooksPage() {
     return `${hh}:${mm} ${dd}/${MM}/${yyyy}`;
   };
 
+  const refreshAuthState = () => {
+    setAuthState({
+      loggedIn: isLoggedIn(),
+      user: getUser(),
+    });
+  };
+
   const handleLogout = () => {
     clearAuth();
+    refreshAuthState();
     navigate('/login');
   };
 
@@ -92,8 +102,23 @@ export default function PublicBooksPage() {
   }, [searchQuery, selectedCategory]);
 
   useEffect(() => {
+    refreshAuthState();
+
+    const handleFocus = () => refreshAuthState();
+    const handleStorage = () => refreshAuthState();
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [location.pathname]);
+
+  useEffect(() => {
     const fetchStudentNotifications = async () => {
-      if (!loggedIn || user?.role !== 'student') {
+      if (!authState.loggedIn || authState.user?.role !== 'student') {
         setNotifications([]);
         return;
       }
@@ -139,8 +164,7 @@ export default function PublicBooksPage() {
 
         extractList(pendingRequests).forEach((request: any) => {
           const requestDate = new Date(request.borrowDate || request.createdAt || Date.now());
-          const pickupDeadline = new Date(requestDate);
-          pickupDeadline.setDate(pickupDeadline.getDate() + 2);
+          const pickupDeadline = new Date(request.dueDate || requestDate);
 
           generatedNotifs.push({
             id: `pending-${request.id}`,
@@ -150,6 +174,25 @@ export default function PublicBooksPage() {
             message: `Bạn đã đăng ký mượn cuốn "${request.book?.title || 'N/A'}". Nhận sách trước ${formatDateTime(pickupDeadline)}.`,
             time: formatDateTime(requestDate),
             isRead: readIds.includes(`pending-${request.id}`),
+            link: '/student/dashboard',
+          });
+        });
+
+        extractList(currentBorrows).forEach((borrow: any) => {
+          const borrowDate = new Date(borrow.borrowDate);
+          const daysSinceBorrow = Math.floor((today.getTime() - borrowDate.getTime()) / (1000 * 60 * 60 * 24));
+          if (Number.isNaN(borrowDate.getTime()) || daysSinceBorrow < 0 || daysSinceBorrow > 2) {
+            return;
+          }
+
+          generatedNotifs.push({
+            id: `approved-${borrow.id}`,
+            type: 'info',
+            icon: 'book',
+            title: 'Phiếu mượn đã được duyệt',
+            message: `Cuốn "${borrow.book?.title || 'N/A'}" đã được duyệt. Ngày trả dự kiến: ${formatDateTime(borrow.dueDate)}.`,
+            time: formatDateTime(borrowDate),
+            isRead: readIds.includes(`approved-${borrow.id}`),
             link: '/student/dashboard',
           });
         });
@@ -167,7 +210,7 @@ export default function PublicBooksPage() {
     };
 
     void fetchStudentNotifications();
-  }, [loggedIn, user?.role]);
+  }, [authState.loggedIn, authState.user?.role]);
 
   const handleMarkAsRead = async (id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
@@ -233,9 +276,9 @@ export default function PublicBooksPage() {
 
             {/* Login/User Actions */}
             <div className="flex items-center gap-4">
-              {loggedIn ? (
+              {authState.loggedIn ? (
                 <>
-                  {user?.role === 'student' && (
+                  {authState.user?.role === 'student' && (
                     <NotificationDropdown
                       notifications={notifications}
                       onMarkAsRead={handleMarkAsRead}
@@ -243,10 +286,10 @@ export default function PublicBooksPage() {
                     />
                   )}
                   <span className="text-sm font-medium text-[#262262]">
-                    Chào, {user?.fullName || user?.username || 'Bạn'}
+                    Chào, {authState.user?.fullName || authState.user?.username || 'Bạn'}
                   </span>
                   <Link
-                    to={user?.role === 'student' ? '/student/dashboard' : '/admin/dashboard'}
+                    to={authState.user?.role === 'student' ? '/student/dashboard' : '/admin/dashboard'}
                     className="px-4 py-2 bg-[#262262] text-white rounded-lg hover:bg-[#1a1745] transition-colors"
                   >
                     Bảng điều khiển

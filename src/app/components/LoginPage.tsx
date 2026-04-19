@@ -104,9 +104,9 @@ export default function LoginPage() {
                 id="username"
                 type="text"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => setUsername(e.target.value.toLowerCase())}
                 placeholder="Nhập tên đăng nhập hoặc email"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg lowercase focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent"
               />
             </div>
 

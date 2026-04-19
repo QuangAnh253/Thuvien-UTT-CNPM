@@ -12,6 +12,7 @@ interface BorrowHistory {
   bookTitle: string;
   borrowDate: string;
   dueDate: string;
+  dueDateRaw?: string;
   returnDate: string | null;
   fine: number;
   status: 'active' | 'returned' | 'overdue';
@@ -53,6 +54,33 @@ export default function StudentHistoryPage() {
     return `${hh}:${mm} ${dd}/${MM}/${yyyy}`;
   };
 
+  const calculateDaysRemaining = (dueDateValue: any) => {
+    if (!dueDateValue) return 0;
+
+    const due = new Date(dueDateValue);
+    if (Number.isNaN(due.getTime())) return 0;
+
+    const today = new Date();
+    const startOfDue = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    return Math.floor((startOfDue.getTime() - startOfToday.getTime()) / (1000 * 60 * 60 * 24));
+  };
+
+  const getRenewalBlockReason = (book: BorrowHistory) => {
+    const daysRemaining = calculateDaysRemaining(book.dueDateRaw || book.dueDate);
+    if (daysRemaining < 0) {
+      return 'Sách đã quá hạn nên không thể gia hạn.';
+    }
+
+    if (daysRemaining > 3) {
+      return 'Chỉ được gia hạn trong 3 ngày trước hạn trả đến hết ngày hạn trả.';
+    }
+
+    return '';
+  };
+
+  const canRenewBorrow = (book: BorrowHistory) => !getRenewalBlockReason(book);
+
   const normalizeStatus = (status: string) => {
     const value = String(status || '').toUpperCase();
     if (value === 'ALL') return 'ALL';
@@ -66,6 +94,7 @@ export default function StudentHistoryPage() {
     bookTitle: item.book?.title || item.bookTitle || '',
     borrowDate: item.borrowDate ? new Date(item.borrowDate).toLocaleDateString('vi-VN') : '—',
     dueDate: item.dueDate ? new Date(item.dueDate).toLocaleDateString('vi-VN') : '—',
+    dueDateRaw: item.dueDate,
     returnDate: item.returnDate ? new Date(item.returnDate).toLocaleDateString('vi-VN') : null,
     fine: (() => {
       const fineFromReturnRecord = Number(item.returnRecord?.fineAmount ?? 0);
@@ -255,11 +284,24 @@ export default function StudentHistoryPage() {
   };
 
   const handleRenewalRequest = (book: BorrowHistory) => {
+    const blockReason = getRenewalBlockReason(book);
+    if (blockReason) {
+      alert(blockReason);
+      return;
+    }
+
     setRenewalModal({ show: true, book });
   };
 
   const confirmRenewal = async () => {
     if (!renewalModal.book) return;
+
+    const blockReason = getRenewalBlockReason(renewalModal.book);
+    if (blockReason) {
+      alert(blockReason);
+      setRenewalModal({ show: false, book: null });
+      return;
+    }
 
     try {
       const res = await apiFetch(`/api/borrow/${renewalModal.book.id}/extend`, {
@@ -459,10 +501,12 @@ export default function StudentHistoryPage() {
                       {(item.status === 'active' || item.status === 'overdue') && (
                         <button
                           onClick={() => handleRenewalRequest(item)}
-                          className="flex items-center gap-2 px-3 py-1.5 bg-[#f79421] text-white rounded-lg hover:bg-[#e67d0f] transition-colors text-sm font-semibold"
+                          disabled={!canRenewBorrow(item)}
+                          title={getRenewalBlockReason(item) || 'Gia hạn sách'}
+                          className="flex items-center gap-2 px-3 py-1.5 bg-[#f79421] text-white rounded-lg hover:bg-[#e67d0f] transition-colors text-sm font-semibold disabled:bg-gray-300 disabled:text-gray-600 disabled:hover:bg-gray-300 disabled:cursor-not-allowed"
                         >
                           <RefreshCw className="w-4 h-4" />
-                          Gia hạn
+                          {canRenewBorrow(item) ? 'Gia hạn' : 'Chưa tới hạn'}
                         </button>
                       )}
                     </td>
@@ -532,12 +576,12 @@ export default function StudentHistoryPage() {
                   <p>Ngày mượn: {renewalModal.book.borrowDate}</p>
                   <p>Hạn trả hiện tại: {renewalModal.book.dueDate}</p>
                   <p className="text-[#f79421] font-semibold mt-2">
-                    Hạn trả mới: {new Date(new Date(renewalModal.book.dueDate).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+                    Hạn trả mới: sẽ được cộng thêm theo chính sách và tự dời qua ngày làm việc nếu rơi vào ngày nghỉ.
                   </p>
                 </div>
               </div>
               <p className="text-sm text-gray-500 mt-3">
-                * Sách sẽ được gia hạn thêm 14 ngày kể từ hạn trả hiện tại
+                * Sách sẽ được gia hạn theo số ngày quy định, sau đó tự dời qua Thứ 7, Chủ nhật và ngày lễ nếu rơi vào ngày nghỉ
               </p>
             </div>
 
