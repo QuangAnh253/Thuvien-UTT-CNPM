@@ -1,0 +1,15 @@
+{
+  "routes": [
+    {
+      "src": "/favicon.ico",
+      "dest": "/LogoUTT_square_blue.png"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}

@@ -10,6 +10,7 @@ interface Reader {
   fullName: string;
   studentId: string;
   readerType: 'student' | 'lecturer';
+  avatarUrl?: string;
   currentlyBorrowing: number;
   hasOverdue: boolean;
 }
@@ -160,6 +161,7 @@ export default function BorrowPage() {
             fullName: reader.fullName,
             studentId: reader.studentCode,
             readerType: reader.readerType === 'lecturer' ? 'lecturer' : 'student',
+            avatarUrl: reader.avatarUrl || '',
             currentlyBorrowing,
             hasOverdue,
           };
@@ -493,8 +495,16 @@ export default function BorrowPage() {
               <>
                 {/* Student Info */}
                 <div className="flex items-center gap-4 pb-4 border-b border-gray-200">
-                  <div className="w-12 h-12 rounded-full bg-[#f79421] text-white flex items-center justify-center text-lg">
-                    {getInitial(selectedReader.fullName)}
+                  <div className="w-12 h-12 rounded-full bg-[#f79421] text-white flex items-center justify-center text-lg overflow-hidden shrink-0">
+                    {selectedReader.avatarUrl ? (
+                      <img
+                        src={selectedReader.avatarUrl}
+                        alt={selectedReader.fullName}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <span>{getInitial(selectedReader.fullName)}</span>
+                    )}
                   </div>
                   <div className="flex-1">
                     <p className="text-[#262262]">{selectedReader.fullName}</p>
