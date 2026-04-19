@@ -4,13 +4,20 @@ import { Link } from 'react-router';
 import NotificationDropdown, { Notification } from './NotificationDropdown';
 import { apiFetch } from '../lib/auth';
 import { useAuth } from '../lib/useAuth';
+import { addReadNotificationId, getReadNotificationIds, saveReadNotificationIds } from '../lib/notificationReadState';
+import { uploadAvatarFile } from '../lib/avatarUpload';
 
 export default function StudentProfilePage() {
+  const notificationScope = 'student-notifications';
   const { user, logout } = useAuth();
   const [fullName, setFullName] = useState('');
+  const [studentCode, setStudentCode] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState('');
+  const [joinDate, setJoinDate] = useState('—');
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -43,9 +50,19 @@ export default function StudentProfilePage() {
       const res = await apiFetch('/api/student/profile');
       if (res && !res.error) {
         setFullName(res.fullName || '');
+        setStudentCode(res.studentCode || res.user?.studentCode || user?.studentCode || '');
         setEmail(res.email || '');
         setPhone(res.phone || '');
         setAddress(res.address || '');
+        setAvatarUrl(res.avatarUrl || '');
+
+        const createdAt = res?.user?.createdAt;
+        if (createdAt) {
+          const parsed = new Date(createdAt);
+          if (!Number.isNaN(parsed.getTime())) {
+            setJoinDate(parsed.toLocaleDateString('vi-VN'));
+          }
+        }
       }
     };
 
@@ -57,7 +74,7 @@ export default function StudentProfilePage() {
         ]);
 
         let generatedNotifs: Notification[] = [];
-        const readIds = JSON.parse(localStorage.getItem('readStudentNotifs') || '[]');
+        const readIds = await getReadNotificationIds(notificationScope);
         const today = new Date();
 
         if (!currentBorrows.error && Array.isArray(currentBorrows)) {
@@ -126,19 +143,16 @@ export default function StudentProfilePage() {
     void fetchStudentNotifications();
   }, []);
 
-  const handleMarkAsRead = (id: string) => {
-    const readIds = JSON.parse(localStorage.getItem('readStudentNotifs') || '[]');
-    if (!readIds.includes(id)) {
-      localStorage.setItem('readStudentNotifs', JSON.stringify([...readIds, id]));
-    }
+  const handleMarkAsRead = async (id: string) => {
 
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
+    await addReadNotificationId(notificationScope, id);
   };
 
-  const handleMarkAllAsRead = () => {
+  const handleMarkAllAsRead = async () => {
     const allIds = notifications.map(n => n.id);
-    localStorage.setItem('readStudentNotifs', JSON.stringify(allIds));
     setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    await saveReadNotificationIds(notificationScope, allIds);
   };
 
   const getInitial = (name: string) => {
@@ -148,7 +162,7 @@ export default function StudentProfilePage() {
   const handleSaveProfile = async () => {
     const res = await apiFetch('/api/student/profile', {
       method: 'PUT',
-      body: JSON.stringify({ fullName, email, phone, address }),
+      body: JSON.stringify({ fullName, email, phone, address, avatarUrl }),
     });
     if (res.error) {
       alert(res.error);
@@ -176,6 +190,33 @@ export default function StudentProfilePage() {
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
+  };
+
+  const handleAvatarChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingAvatar(true);
+    try {
+      const nextAvatarUrl = await uploadAvatarFile(file);
+      const res = await apiFetch('/api/student/profile', {
+        method: 'PUT',
+        body: JSON.stringify({ fullName, email, phone, address, avatarUrl: nextAvatarUrl }),
+      });
+
+      if (res?.error) {
+        alert(res.error || 'Không thể cập nhật ảnh đại diện.');
+        return;
+      }
+
+      setAvatarUrl(nextAvatarUrl);
+      alert('Đã cập nhật ảnh đại diện.');
+    } catch (error: any) {
+      alert(error?.message || 'Upload ảnh thất bại.');
+    } finally {
+      setIsUploadingAvatar(false);
+      event.target.value = '';
+    }
   };
 
   return (
@@ -248,13 +289,29 @@ export default function StudentProfilePage() {
           <div className="lg:col-span-1">
             <div className="bg-white rounded-lg border border-gray-200 p-6 text-center">
               {/* Avatar */}
-              <div className="w-32 h-32 mx-auto mb-4 bg-[#f79421] rounded-full flex items-center justify-center">
-                <span className="text-5xl text-white">{getInitial(fullName)}</span>
+              <div className="w-32 h-32 mx-auto mb-4 bg-[#f79421] rounded-full flex items-center justify-center overflow-hidden">
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-5xl text-white">{getInitial(fullName)}</span>
+                )}
+              </div>
+              <div className="mb-4">
+                <label className="inline-flex items-center px-4 py-2 text-sm text-[#262262] border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer">
+                  {isUploadingAvatar ? 'Đang upload...' : 'Đổi ảnh đại diện'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleAvatarChange}
+                    disabled={isUploadingAvatar}
+                  />
+                </label>
               </div>
 
               {/* Name and Student ID */}
               <h2 className="text-2xl text-[#262262] mb-1">{fullName}</h2>
-              <p className="text-gray-600 mb-4">Mã sinh viên: {user?.studentId || ''}</p>
+              <p className="text-gray-600 mb-4">Mã sinh viên: {studentCode || user?.studentCode || ''}</p>
 
               {/* Account Status */}
               <div className="mb-6">
@@ -266,7 +323,7 @@ export default function StudentProfilePage() {
               {/* Join Date */}
               <div className="pt-6 border-t border-gray-200">
                 <p className="text-sm text-gray-500">Ngày tham gia</p>
-                <p className="text-[#262262] font-semibold">15/09/2023</p>
+                <p className="text-[#262262] font-semibold">{joinDate}</p>
               </div>
             </div>
           </div>

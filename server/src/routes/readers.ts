@@ -4,6 +4,27 @@ import { prisma } from '../lib/prisma';
 import { authenticateToken } from '../middleware/auth';
 
 const router = express.Router();
+const buildAvatarKey = (userId: number) => `avatar:${userId}`;
+
+const getAvatarUrl = async (userId: number) => {
+  const key = buildAvatarKey(userId);
+  const config = await prisma.config.findUnique({ where: { key } });
+  return config?.value || '';
+};
+
+const parseDob = (value: any): Date => {
+  const raw = String(value || '').trim();
+  if (!raw) return new Date();
+
+  const ddmmyyyy = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (ddmmyyyy) {
+    const [, dd, mm, yyyy] = ddmmyyyy;
+    return new Date(`${yyyy}-${mm}-${dd}T00:00:00.000Z`);
+  }
+
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+};
 
 // 1. LẤY DANH SÁCH ĐỘC GIẢ (Chỉ Admin/Librarian)
 router.get('/', authenticateToken, async (req: any, res) => {
@@ -20,12 +41,27 @@ router.get('/', authenticateToken, async (req: any, res) => {
         ]
       },
       include: {
-        user: { select: { username: true, role: true, status: true } }
+        user: {
+          select: {
+            username: true,
+            role: true,
+            status: true,
+            _count: { select: { borrows: true } },
+          },
+        },
       },
       orderBy: { id: 'desc' }
     });
-    
-    res.json(readers);
+
+    const readersWithAvatars = await Promise.all(
+      readers.map(async (reader) => ({
+        ...reader,
+        borrowedBooks: reader.user?._count.borrows ?? 0,
+        avatarUrl: await getAvatarUrl(reader.userId),
+      }))
+    );
+
+    res.json(readersWithAvatars);
   } catch (error) {
     res.status(500).json({ error: 'Lỗi server khi tải danh sách độc giả' });
   }
@@ -41,7 +77,7 @@ router.get('/:id', authenticateToken, async (req: any, res: any) => {
         user: {
           include: {
             borrows: {
-              include: { book: true },
+              include: { book: true, returnRecord: true },
               orderBy: { borrowDate: 'desc' }
             }
           }
@@ -50,7 +86,9 @@ router.get('/:id', authenticateToken, async (req: any, res: any) => {
     });
 
     if (!reader) return res.status(404).json({ error: 'Không tìm thấy độc giả' });
-    res.json(reader);
+
+    const avatarUrl = await getAvatarUrl(reader.userId);
+    res.json({ ...reader, avatarUrl });
   } catch (error) {
     res.status(500).json({ error: 'Lỗi server' });
   }
@@ -59,7 +97,7 @@ router.get('/:id', authenticateToken, async (req: any, res: any) => {
 // 3. THÊM ĐỘC GIẢ MỚI (Tương tự Register nhưng do Admin làm)
 router.post('/', authenticateToken, async (req: any, res: any) => {
   try {
-    const { studentCode, fullName, email, phone, address, username, password } = req.body;
+    const { studentCode, fullName, dob, email, phone, address, readerType, username, password } = req.body;
 
     const existing = await prisma.user.findUnique({ where: { username } });
     if (existing) return res.status(400).json({ error: 'Tên đăng nhập đã tồn tại' });
@@ -75,8 +113,8 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
         student: {
           create: {
             studentCode, fullName, email, phone, address,
-            readerType: 'student',
-            dob: new Date()
+            readerType: String(readerType || '').toLowerCase().includes('giảng') ? 'lecturer' : 'student',
+            dob: parseDob(dob)
           }
         }
       }
@@ -90,10 +128,23 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
 // 4. CẬP NHẬT THÔNG TIN
 router.put('/:id', authenticateToken, async (req: any, res: any) => {
   try {
-    const { fullName, email, phone, address, readerType } = req.body;
+    const { fullName, email, phone, address, readerType, studentCode, dob } = req.body;
+
+    const normalizedReaderType = String(readerType || '').toLowerCase().includes('giảng')
+      ? 'lecturer'
+      : 'student';
+
     const updated = await prisma.student.update({
       where: { id: Number(req.params.id) },
-      data: { fullName, email, phone, address, readerType }
+      data: {
+        fullName,
+        email,
+        phone,
+        address,
+        readerType: normalizedReaderType,
+        studentCode: studentCode || undefined,
+        dob: dob ? parseDob(dob) : undefined,
+      }
     });
     res.json(updated);
   } catch (error) {

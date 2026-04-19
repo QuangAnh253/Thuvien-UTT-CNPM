@@ -3,16 +3,68 @@ import { useParams, Link } from 'react-router';
 import { ChevronRight, BookOpen, Clock, AlertCircle, DollarSign, Pencil, Lock } from 'lucide-react';
 import AdminLayout from './AdminLayout';
 import { apiFetch } from '../lib/auth';
+import { preloadImage } from '../lib/imageCache';
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 const toStartOfDay = (date: Date) =>
   new Date(date.getFullYear(), date.getMonth(), date.getDate());
 
+const formatDateDDMMYYYY = (value: any) => {
+  if (!value) return '—';
+
+  if (typeof value === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(value)) {
+    return value;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yyyy = date.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+};
+
 const getOverdueDaysByDate = (dueDateString: string) => {
   const due = toStartOfDay(new Date(dueDateString));
   const today = toStartOfDay(new Date());
   return Math.max(0, Math.floor((today.getTime() - due.getTime()) / MS_PER_DAY));
+};
+
+const getBorrowStatus = (borrow: any): 'borrowing' | 'overdue' | 'returned' => {
+  const upperStatus = String(borrow?.status || '').toUpperCase();
+  if (borrow?.returnDate || upperStatus === 'RETURNED') return 'returned';
+  if (upperStatus === 'BORROWING' && borrow?.dueDate && getOverdueDaysByDate(borrow.dueDate) > 0) {
+    return 'overdue';
+  }
+  return 'borrowing';
+};
+
+const mapBorrowHistory = (borrow: any): BorrowHistory => {
+  const status = getBorrowStatus(borrow);
+  const returnRecordFine = Number(borrow?.returnRecord?.fineAmount ?? 0);
+  const borrowFine = Number(borrow?.fine ?? borrow?.fineAmount ?? 0);
+  const computedFine = (() => {
+    if (returnRecordFine > 0) return returnRecordFine;
+    if (borrowFine > 0) return borrowFine;
+    if (status !== 'returned' || !borrow?.dueDate || !borrow?.returnDate) return 0;
+
+    const due = toStartOfDay(new Date(borrow.dueDate));
+    const returned = toStartOfDay(new Date(borrow.returnDate));
+    return Math.max(0, Math.floor((returned.getTime() - due.getTime()) / MS_PER_DAY)) * 5000;
+  })();
+
+  return {
+    id: String(borrow.id),
+    borrowCode: borrow.borrowCode || `PM${String(borrow.id).padStart(4, '0')}`,
+    bookName: borrow.book?.title || 'N/A',
+    borrowDate: formatDateDDMMYYYY(borrow.borrowDate),
+    dueDate: formatDateDDMMYYYY(borrow.dueDate),
+    returnDate: borrow.returnDate ? formatDateDDMMYYYY(borrow.returnDate) : null,
+    fine: computedFine,
+    status,
+  };
 };
 
 interface BorrowHistory {
@@ -67,6 +119,7 @@ export default function ReaderDetailPage() {
         const res = await apiFetch(`/api/readers/${id}`);
         if (res && !res.error) {
           setReader(res);
+          if (res.avatarUrl) preloadImage(res.avatarUrl);
         } else {
           setReader(null);
         }
@@ -198,23 +251,17 @@ export default function ReaderDetailPage() {
   };
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('vi-VN');
+    return formatDateDDMMYYYY(dateString);
   };
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('vi-VN').format(amount);
   };
 
-  const borrowHistory = reader?.user?.borrows || [];
-  const currentlyBorrowing = borrowHistory.filter((b: any) => !b.returnDate).length;
-  const overdueCount = borrowHistory.filter(
-    (b: any) => !b.returnDate && b.status === 'BORROWING' && getOverdueDaysByDate(b.dueDate) > 0
-  ).length;
-  const totalFines = borrowHistory.reduce(
-    (sum: number, item: any) => sum + Math.max(0, Number(item.fine || 0)),
-    0
-  );
+  const borrowHistory = (reader?.user?.borrows || []).map(mapBorrowHistory);
+  const currentlyBorrowing = borrowHistory.filter((b: BorrowHistory) => b.status === 'borrowing').length;
+  const overdueCount = borrowHistory.filter((b: BorrowHistory) => b.status === 'overdue').length;
+  const totalFines = borrowHistory.reduce((sum: number, item: BorrowHistory) => sum + Math.max(0, Number(item.fine || 0)), 0);
   const accountStatus = reader?.user?.status === 'locked' ? 'locked' : 'active';
 
   return (
@@ -236,8 +283,12 @@ export default function ReaderDetailPage() {
             <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
               {/* Avatar */}
               <div className="flex justify-center">
-                <div className="w-24 h-24 rounded-full bg-[#f79421] text-white flex items-center justify-center text-3xl">
-                  {getInitial(reader.fullName)}
+                <div className="w-24 h-24 rounded-full bg-[#f79421] text-white flex items-center justify-center text-3xl overflow-hidden">
+                  {reader.avatarUrl ? (
+                    <img src={reader.avatarUrl} alt={reader.fullName} className="w-full h-full object-cover" />
+                  ) : (
+                    getInitial(reader.fullName)
+                  )}
                 </div>
               </div>
 
@@ -380,10 +431,10 @@ export default function ReaderDetailPage() {
                       >
                         <td className="px-6 py-4 text-[#262262]">{record.borrowCode}</td>
                         <td className="px-6 py-4 text-[#262262]">{record.bookName}</td>
-                        <td className="px-6 py-4 text-gray-600">{formatDate(record.borrowDate)}</td>
-                        <td className="px-6 py-4 text-gray-600">{formatDate(record.dueDate)}</td>
+                        <td className="px-6 py-4 text-gray-600">{record.borrowDate}</td>
+                        <td className="px-6 py-4 text-gray-600">{record.dueDate}</td>
                         <td className="px-6 py-4 text-gray-600">
-                          {record.returnDate ? formatDate(record.returnDate) : '—'}
+                          {record.returnDate || '—'}
                         </td>
                         <td className="px-6 py-4 text-gray-600">
                           {record.fine > 0 ? formatCurrency(record.fine) : '—'}

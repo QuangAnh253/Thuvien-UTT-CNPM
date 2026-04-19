@@ -5,15 +5,44 @@ import { authenticateToken } from '../middleware/auth';
 
 const router = express.Router();
 
+const isAdminRole = (role: unknown) => String(role || '').toLowerCase() === 'admin';
+const buildAvatarKey = (userId: number) => `avatar:${userId}`;
+
+const getAvatarUrl = async (userId: number) => {
+  const key = buildAvatarKey(userId);
+  const config = await prisma.config.findUnique({ where: { key } });
+  return config?.value || '';
+};
+
+const setAvatarUrl = async (userId: number, avatarUrl: string) => {
+  const key = buildAvatarKey(userId);
+  const cleanUrl = String(avatarUrl || '').trim();
+
+  if (!cleanUrl) {
+    await prisma.config.deleteMany({ where: { key } });
+    return '';
+  }
+
+  await prisma.config.upsert({
+    where: { key },
+    create: { key, value: cleanUrl },
+    update: { value: cleanUrl },
+  });
+
+  return cleanUrl;
+};
+
 // 1. LẤY THÔNG TIN CÁ NHÂN (Dùng cho trang Profile của Staff)
 router.get('/me', authenticateToken, async (req: any, res: any) => {
   try {
     const staff = await prisma.staff.findUnique({
       where: { userId: req.user.id },
-      include: { user: { select: { username: true, role: true } } }
+      include: { user: { select: { username: true, role: true, createdAt: true } } }
     });
     if (!staff) return res.status(404).json({ error: 'Không tìm thấy thông tin nhân viên' });
-    res.json(staff);
+
+    const avatarUrl = await getAvatarUrl(req.user.id);
+    res.json({ ...staff, avatarUrl });
   } catch (error) {
     res.status(500).json({ error: 'Lỗi server' });
   }
@@ -22,12 +51,22 @@ router.get('/me', authenticateToken, async (req: any, res: any) => {
 // 2. CẬP NHẬT THÔNG TIN CÁ NHÂN
 router.put('/me', authenticateToken, async (req: any, res: any) => {
   try {
-    const { fullName, email } = req.body;
+    const { fullName, email, phone } = req.body;
     const updated = await prisma.staff.update({
       where: { userId: req.user.id },
-      data: { fullName, email }
+      data: {
+        fullName,
+        email,
+        phone,
+      },
     });
-    res.json(updated);
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'avatarUrl')) {
+      await setAvatarUrl(req.user.id, req.body.avatarUrl);
+    }
+
+    const avatarUrl = await getAvatarUrl(req.user.id);
+    res.json({ ...updated, avatarUrl });
   } catch (error) {
     res.status(500).json({ error: 'Lỗi khi cập nhật thông tin' });
   }
@@ -36,7 +75,7 @@ router.put('/me', authenticateToken, async (req: any, res: any) => {
 // 2b. ĐỔI MẬT KHẨU NHÂN VIÊN (Dùng cho màn hình reset password)
 router.put('/:id/password', authenticateToken, async (req: any, res: any) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Không có quyền' });
+    if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: 'Bạn không có quyền truy cập' });
 
     const staffId = Number(req.params.id);
     const { newPassword } = req.body;
@@ -63,7 +102,7 @@ router.put('/:id/password', authenticateToken, async (req: any, res: any) => {
 // 3. LẤY CHI TIẾT NHÂN VIÊN
 router.get('/:id', authenticateToken, async (req: any, res: any) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Chỉ Admin mới có quyền truy cập' });
+    if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: 'Bạn không có quyền truy cập' });
 
     const staff = await prisma.staff.findUnique({
       where: { id: Number(req.params.id) },
@@ -71,7 +110,8 @@ router.get('/:id', authenticateToken, async (req: any, res: any) => {
     });
 
     if (!staff) return res.status(404).json({ error: 'Không tìm thấy nhân viên' });
-    res.json(staff);
+    const avatarUrl = await getAvatarUrl(staff.userId);
+    res.json({ ...staff, avatarUrl });
   } catch (error) {
     res.status(500).json({ error: 'Lỗi server' });
   }
@@ -80,7 +120,7 @@ router.get('/:id', authenticateToken, async (req: any, res: any) => {
 // 4. CẬP NHẬT NHÂN VIÊN THEO ID
 router.put('/:id', authenticateToken, async (req: any, res: any) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Không có quyền' });
+    if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: 'Bạn không có quyền truy cập' });
 
     const staffId = Number(req.params.id);
     const { fullName, email, phone, username, position, staffId: staffCode } = req.body;
@@ -117,8 +157,12 @@ router.put('/:id', authenticateToken, async (req: any, res: any) => {
       where: { id: staffId },
       include: { user: { select: { username: true, role: true, status: true } } },
     });
+    if (!updated) {
+      return res.status(404).json({ error: 'Không tìm thấy nhân viên' });
+    }
 
-    res.json(updated);
+    const avatarUrl = await getAvatarUrl(updated.userId);
+    res.json({ ...updated, avatarUrl });
   } catch (error) {
     res.status(500).json({ error: 'Lỗi khi cập nhật nhân viên' });
   }
@@ -127,13 +171,21 @@ router.put('/:id', authenticateToken, async (req: any, res: any) => {
 // 5. LẤY DANH SÁCH NHÂN VIÊN (Chỉ Admin)
 router.get('/', authenticateToken, async (req: any, res: any) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Chỉ Admin mới có quyền truy cập' });
+    if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: 'Bạn không có quyền truy cập' });
 
     const staffList = await prisma.staff.findMany({
       include: { user: { select: { username: true, role: true, status: true } } },
       orderBy: { id: 'desc' }
     });
-    res.json(staffList);
+
+    const staffWithAvatars = await Promise.all(
+      staffList.map(async (item) => ({
+        ...item,
+        avatarUrl: await getAvatarUrl(item.userId),
+      }))
+    );
+
+    res.json(staffWithAvatars);
   } catch (error) {
     res.status(500).json({ error: 'Lỗi server' });
   }
@@ -142,7 +194,7 @@ router.get('/', authenticateToken, async (req: any, res: any) => {
 // 6. THÊM NHÂN VIÊN MỚI (Chỉ Admin)
 router.post('/', authenticateToken, async (req: any, res: any) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Không có quyền' });
+    if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: 'Bạn không có quyền truy cập' });
 
     const { username, password, fullName, email, phone, role, staffId: staffCode, position } = req.body;
 
@@ -172,8 +224,12 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
       where: { userId: newUser.id },
       include: { user: { select: { username: true, role: true, status: true } } },
     });
+    if (!createdStaff) {
+      return res.status(404).json({ error: 'Không thể tạo nhân viên' });
+    }
 
-    res.json(createdStaff);
+    const avatarUrl = await getAvatarUrl(createdStaff.userId);
+    res.json({ ...createdStaff, avatarUrl });
   } catch (error) {
     res.status(500).json({ error: 'Lỗi khi tạo nhân viên' });
   }
@@ -182,7 +238,7 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
 // 7. XÓA NHÂN VIÊN (Chỉ Admin)
 router.delete('/:id', authenticateToken, async (req: any, res: any) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Không có quyền' });
+    if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: 'Bạn không có quyền truy cập' });
 
     const staffId = Number(req.params.id);
     const staff = await prisma.staff.findUnique({ where: { id: staffId } });

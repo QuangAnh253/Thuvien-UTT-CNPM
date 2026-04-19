@@ -3,6 +3,31 @@ import { prisma } from '../lib/prisma';
 import { authenticateToken } from '../middleware/auth';
 
 const router = express.Router();
+const buildAvatarKey = (userId: number) => `avatar:${userId}`;
+
+const getAvatarUrl = async (userId: number) => {
+  const key = buildAvatarKey(userId);
+  const config = await prisma.config.findUnique({ where: { key } });
+  return config?.value || '';
+};
+
+const setAvatarUrl = async (userId: number, avatarUrl: string) => {
+  const key = buildAvatarKey(userId);
+  const cleanUrl = String(avatarUrl || '').trim();
+
+  if (!cleanUrl) {
+    await prisma.config.deleteMany({ where: { key } });
+    return '';
+  }
+
+  await prisma.config.upsert({
+    where: { key },
+    create: { key, value: cleanUrl },
+    update: { value: cleanUrl },
+  });
+
+  return cleanUrl;
+};
 
 // Middleware kiểm tra quyền (Chỉ sinh viên mới được gọi các API này)
 const checkStudentRole = (req: any, res: any, next: any) => {
@@ -64,7 +89,10 @@ router.get('/history', authenticateToken, checkStudentRole, async (req: any, res
 
     const history = await prisma.borrow.findMany({
       where: whereClause,
-      include: { book: true },
+      include: {
+        book: true,
+        returnRecord: true,
+      },
       orderBy: { id: 'desc' } // Mới nhất lên đầu
     });
     
@@ -97,12 +125,14 @@ router.get('/profile', authenticateToken, checkStudentRole, async (req: any, res
     const profile = await prisma.student.findUnique({
       where: { userId: req.user.id },
       include: { 
-        user: { select: { username: true, status: true } } 
+        user: { select: { username: true, status: true, createdAt: true } } 
       }
     });
     
     if (!profile) return res.status(404).json({ error: 'Không tìm thấy hồ sơ sinh viên' });
-    res.json(profile);
+
+    const avatarUrl = await getAvatarUrl(req.user.id);
+    res.json({ ...profile, avatarUrl });
   } catch (error) {
     res.status(500).json({ error: 'Lỗi tải thông tin hồ sơ' });
   }
@@ -117,8 +147,14 @@ router.put('/profile', authenticateToken, checkStudentRole, async (req: any, res
       where: { userId: req.user.id },
       data: { fullName, email, phone, address }
     });
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'avatarUrl')) {
+      await setAvatarUrl(req.user.id, req.body.avatarUrl);
+    }
+
+    const avatarUrl = await getAvatarUrl(req.user.id);
     
-    res.json(updatedProfile);
+    res.json({ ...updatedProfile, avatarUrl });
   } catch (error) {
     res.status(500).json({ error: 'Lỗi cập nhật thông tin hồ sơ' });
   }

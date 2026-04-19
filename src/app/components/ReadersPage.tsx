@@ -3,6 +3,7 @@ import { Search, Plus, Pencil, Trash2, AlertTriangle, X } from 'lucide-react';
 import { Link } from 'react-router';
 import AdminLayout from './AdminLayout';
 import { apiFetch } from '../lib/auth';
+import { preloadImages } from '../lib/imageCache';
 
 interface Reader {
   id: string;
@@ -10,6 +11,7 @@ interface Reader {
   studentId: string;
   email: string;
   phone: string;
+  avatarUrl: string;
   dateOfBirth: string;
   address: string;
   readerType: 'Sinh viên' | 'Giảng viên';
@@ -20,68 +22,24 @@ interface Reader {
   };
 }
 
-const mockReaders: Reader[] = [
-  {
-    id: '1',
-    fullName: 'Nguyễn Văn An',
-    studentId: 'SV001',
-    email: 'an.nguyen@university.edu.vn',
-    phone: '0912345678',
-    dateOfBirth: '2003-05-15',
-    address: '123 Nguyễn Huệ, Q1, TP.HCM',
-    readerType: 'Sinh viên',
-    borrowedBooks: 3,
-    accountStatus: 'active',
-  },
-  {
-    id: '2',
-    fullName: 'Trần Thị Bảo',
-    studentId: 'SV002',
-    email: 'bao.tran@university.edu.vn',
-    phone: '0923456789',
-    dateOfBirth: '2003-08-20',
-    address: '456 Lê Lợi, Q1, TP.HCM',
-    readerType: 'Sinh viên',
-    borrowedBooks: 2,
-    accountStatus: 'active',
-  },
-  {
-    id: '3',
-    fullName: 'Lê Minh Châu',
-    studentId: 'SV003',
-    email: 'chau.le@university.edu.vn',
-    phone: '0934567890',
-    dateOfBirth: '2002-11-10',
-    address: '789 Trần Hưng Đạo, Q5, TP.HCM',
-    readerType: 'Sinh viên',
-    borrowedBooks: 0,
-    accountStatus: 'locked',
-  },
-  {
-    id: '4',
-    fullName: 'TS. Phạm Văn Dũng',
-    studentId: 'GV001',
-    email: 'dung.pham@university.edu.vn',
-    phone: '0945678901',
-    dateOfBirth: '1985-03-25',
-    address: '321 Nguyễn Thị Minh Khai, Q3, TP.HCM',
-    readerType: 'Giảng viên',
-    borrowedBooks: 5,
-    accountStatus: 'active',
-  },
-  {
-    id: '5',
-    fullName: 'Hoàng Thu Eya',
-    studentId: 'SV004',
-    email: 'eya.hoang@university.edu.vn',
-    phone: '0956789012',
-    dateOfBirth: '2003-07-18',
-    address: '654 Điện Biên Phủ, Q10, TP.HCM',
-    readerType: 'Sinh viên',
-    borrowedBooks: 1,
-    accountStatus: 'active',
-  },
-];
+interface ReaderApiRecord {
+  id: number;
+  fullName: string;
+  studentCode: string;
+  email: string;
+  phone: string;
+  avatarUrl?: string;
+  address: string;
+  readerType: string;
+  dob: string;
+  borrowedBooks?: number;
+  user?: {
+    status?: 'active' | 'locked';
+    _count?: {
+      borrows?: number;
+    };
+  };
+}
 
 const readerTypes = ['Tất cả', 'Sinh viên', 'Giảng viên'];
 
@@ -107,23 +65,63 @@ export default function ReadersPage() {
     readerType: 'Sinh viên' as 'Sinh viên' | 'Giảng viên',
   });
 
-  useEffect(() => {
-    const fetchReaders = async () => {
-      setLoading(true);
-      const query = new URLSearchParams();
-      if (searchQuery.trim()) {
-        query.set('search', searchQuery.trim());
-      }
+  const normalizeDobToISO = (input: string) => {
+    const raw = String(input || '').trim();
+    if (!raw) return null;
 
-      const res = await apiFetch(`/api/readers?${query.toString()}`);
-      if (res && !res.error) {
-        setReaders(Array.isArray(res) ? res : []);
-      } else {
-        setReaders([]);
-      }
-      setLoading(false);
-    };
-    fetchReaders();
+    const ddmmyyyy = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (ddmmyyyy) {
+      const [, dd, mm, yyyy] = ddmmyyyy;
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    const yyyymmdd = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (yyyymmdd) {
+      return raw;
+    }
+
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return null;
+    const yyyy = parsed.getFullYear();
+    const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+    const dd = String(parsed.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const loadReaders = async () => {
+    setLoading(true);
+    const query = new URLSearchParams();
+    if (searchQuery.trim()) {
+      query.set('search', searchQuery.trim());
+    }
+
+    const res = await apiFetch(`/api/readers?${query.toString()}`);
+    if (res && !res.error) {
+      const normalizedReaders = (Array.isArray(res) ? res : []).map((reader: ReaderApiRecord) => ({
+        id: String(reader.id),
+        fullName: reader.fullName,
+        studentId: reader.studentCode,
+        email: reader.email,
+        phone: reader.phone,
+        avatarUrl: reader.avatarUrl || '',
+        dateOfBirth: reader.dob,
+        address: reader.address,
+        readerType: (reader.readerType === 'lecturer' ? 'Giảng viên' : 'Sinh viên') as Reader['readerType'],
+        borrowedBooks: reader.borrowedBooks ?? reader.user?._count?.borrows ?? 0,
+        accountStatus: reader.user?.status || 'active',
+        user: reader.user,
+      }));
+
+      setReaders(normalizedReaders);
+      preloadImages(normalizedReaders.map((reader) => reader.avatarUrl).filter(Boolean));
+    } else {
+      setReaders([]);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    void loadReaders();
   }, [searchQuery]);
 
   const filteredReaders = readers.filter((reader) => {
@@ -142,53 +140,87 @@ export default function ReadersPage() {
     currentPage * itemsPerPage
   );
 
-  const handleAddReader = (e: React.FormEvent) => {
+  const handleAddReader = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newReader: Reader = {
-      id: String(readers.length + 1),
-      fullName: formData.fullName,
-      studentId: formData.studentId,
-      email: formData.email,
-      phone: formData.phone,
-      dateOfBirth: formData.dateOfBirth,
-      address: formData.address,
-      readerType: formData.readerType,
-      borrowedBooks: 0,
-      accountStatus: 'active',
-    };
-    setReaders([...readers, newReader]);
+
+    const normalizedDob = normalizeDobToISO(formData.dateOfBirth);
+    if (!normalizedDob) {
+      alert('Vui lòng chọn ngày sinh hợp lệ');
+      return;
+    }
+
+    const username = formData.studentId.trim().toLowerCase();
+    const createRes = await apiFetch('/api/readers', {
+      method: 'POST',
+      body: JSON.stringify({
+        studentCode: formData.studentId.trim(),
+        fullName: formData.fullName.trim(),
+        dob: normalizedDob,
+        email: formData.email.trim(),
+        phone: formData.phone.trim(),
+        address: formData.address.trim(),
+        readerType: formData.readerType,
+        username,
+        password: 'default123',
+      }),
+    });
+
+    if (createRes?.error) {
+      alert(createRes.error || 'Thêm độc giả thất bại');
+      return;
+    }
+
+    await loadReaders();
     setIsAddModalOpen(false);
     resetForm();
   };
 
-  const handleEditReader = (e: React.FormEvent) => {
+  const handleEditReader = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedReaderId) {
-      setReaders(
-        readers.map((reader) =>
-          reader.id === selectedReaderId
-            ? {
-                ...reader,
-                fullName: formData.fullName,
-                studentId: formData.studentId,
-                email: formData.email,
-                phone: formData.phone,
-                dateOfBirth: formData.dateOfBirth,
-                address: formData.address,
-                readerType: formData.readerType,
-              }
-            : reader
-        )
-      );
+      const normalizedDob = normalizeDobToISO(formData.dateOfBirth);
+      if (!normalizedDob) {
+        alert('Vui lòng chọn ngày sinh hợp lệ');
+        return;
+      }
+
+      const updateRes = await apiFetch(`/api/readers/${selectedReaderId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          fullName: formData.fullName.trim(),
+          studentCode: formData.studentId.trim(),
+          dob: normalizedDob,
+          email: formData.email.trim(),
+          phone: formData.phone.trim(),
+          address: formData.address.trim(),
+          readerType: formData.readerType,
+        }),
+      });
+
+      if (updateRes?.error) {
+        alert(updateRes.error || 'Cập nhật độc giả thất bại');
+        return;
+      }
+
+      await loadReaders();
       setIsEditModalOpen(false);
       setSelectedReaderId(null);
       resetForm();
     }
   };
 
-  const handleDeleteReader = () => {
+  const handleDeleteReader = async () => {
     if (selectedReaderId) {
-      setReaders(readers.filter((reader) => reader.id !== selectedReaderId));
+      const deleteRes = await apiFetch(`/api/readers/${selectedReaderId}`, {
+        method: 'DELETE',
+      });
+
+      if (deleteRes?.error) {
+        alert(deleteRes.error || 'Xóa độc giả thất bại');
+        return;
+      }
+
+      await loadReaders();
       setIsDeleteModalOpen(false);
       setSelectedReaderId(null);
     }
@@ -199,7 +231,7 @@ export default function ReadersPage() {
     setFormData({
       fullName: reader.fullName,
       studentId: reader.studentId,
-      dateOfBirth: reader.dateOfBirth,
+      dateOfBirth: normalizeDobToISO(reader.dateOfBirth) || '',
       email: reader.email,
       phone: reader.phone,
       address: reader.address,
@@ -303,8 +335,12 @@ export default function ReadersPage() {
                   >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-[#f79421] text-white flex items-center justify-center">
-                          {getInitial(reader.fullName)}
+                        <div className="w-10 h-10 rounded-full bg-[#f79421] text-white flex items-center justify-center overflow-hidden">
+                          {reader.avatarUrl ? (
+                            <img src={reader.avatarUrl} alt={reader.fullName} className="w-full h-full object-cover" />
+                          ) : (
+                            getInitial(reader.fullName)
+                          )}
                         </div>
                         <span className="text-[#262262]">{reader.fullName}</span>
                       </div>

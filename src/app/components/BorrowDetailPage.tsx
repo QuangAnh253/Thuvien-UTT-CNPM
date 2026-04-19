@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router';
 import { ChevronRight, Calendar, Clock, BookOpen, User, FileText } from 'lucide-react';
 import AdminLayout from './AdminLayout';
 import { apiFetch } from '../lib/auth';
+import { preloadImage } from '../lib/imageCache';
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
@@ -19,6 +20,7 @@ interface BorrowDetail {
   id: string;
   borrowCode: string;
   readerName: string;
+  readerAvatarUrl: string;
   studentId: string;
   readerId: string;
   readerType: string;
@@ -72,6 +74,7 @@ export default function BorrowDetailPage() {
         id: String(res.id),
         borrowCode: `PM${String(res.id).padStart(3, '0')}`,
         readerName: res.user?.student?.fullName || res.user?.username || 'N/A',
+        readerAvatarUrl: res.user?.avatarUrl || '',
         studentId: res.user?.student?.studentCode || 'N/A',
         readerId: String(res.user?.student?.id || ''),
         readerType: 'Sinh viên',
@@ -93,6 +96,7 @@ export default function BorrowDetailPage() {
       };
 
       setBorrow(mapped);
+      if (mapped.readerAvatarUrl) preloadImage(mapped.readerAvatarUrl);
       setLoading(false);
     };
 
@@ -178,8 +182,12 @@ export default function BorrowDetailPage() {
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-full bg-[#f79421] text-white flex items-center justify-center text-2xl">
-                {getInitial(borrow.readerName)}
+              <div className="w-16 h-16 rounded-full bg-[#f79421] text-white flex items-center justify-center text-2xl overflow-hidden">
+                {borrow.readerAvatarUrl ? (
+                  <img src={borrow.readerAvatarUrl} alt={borrow.readerName} className="w-full h-full object-cover" />
+                ) : (
+                  getInitial(borrow.readerName)
+                )}
               </div>
               <div>
                 <h2 className="text-2xl text-[#262262]">{borrow.borrowCode}</h2>

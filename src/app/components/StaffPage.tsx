@@ -11,6 +11,7 @@ interface Staff {
   email: string;
   phone: string;
   username: string;
+  avatarUrl: string;
   accountStatus: 'active' | 'locked';
   permissions: string[];
 }
@@ -24,6 +25,8 @@ const permissionOptions = [
   { id: 'reports', label: 'Báo cáo' },
   { id: 'staff', label: 'Quản lý nhân viên' },
 ];
+
+const managerOnlyPermissionIds = new Set(['reports', 'staff']);
 
 export default function StaffPage() {
   const [staff, setStaff] = useState<Staff[]>([]);
@@ -54,6 +57,17 @@ export default function StaffPage() {
     confirmPassword: '',
   });
 
+  const isLibrarianSelected = formData.position === 'Thủ thư';
+
+  useEffect(() => {
+    if (!isLibrarianSelected) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      permissions: prev.permissions.filter((permissionId) => !managerOnlyPermissionIds.has(permissionId)),
+    }));
+  }, [isLibrarianSelected]);
+
   const mapApiStaffToUi = (item: any): Staff => {
     const position = String(item.position || '').toLowerCase().includes('manager')
       ? 'Quản lý'
@@ -74,6 +88,7 @@ export default function StaffPage() {
       email: item.email || '',
       phone: item.phone || '',
       username: item.user?.username || '',
+      avatarUrl: item.avatarUrl || '',
       accountStatus,
       permissions,
     };
@@ -259,6 +274,10 @@ export default function StaffPage() {
   };
 
   const togglePermission = (permissionId: string) => {
+    if (isLibrarianSelected && managerOnlyPermissionIds.has(permissionId)) {
+      return;
+    }
+
     setFormData({
       ...formData,
       permissions: formData.permissions.includes(permissionId)
@@ -334,8 +353,12 @@ export default function StaffPage() {
                   >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-[#f79421] text-white flex items-center justify-center">
-                          {getInitial(member.fullName)}
+                        <div className="w-10 h-10 rounded-full bg-[#f79421] text-white flex items-center justify-center overflow-hidden">
+                          {member.avatarUrl ? (
+                            <img src={member.avatarUrl} alt={member.fullName} className="w-full h-full object-cover" />
+                          ) : (
+                            getInitial(member.fullName)
+                          )}
                         </div>
                         <span className="text-[#262262]">{member.fullName}</span>
                       </div>
@@ -566,21 +589,33 @@ export default function StaffPage() {
               <div>
                 <h3 className="text-[#262262] mb-4">Phân quyền</h3>
                 <div className="space-y-2">
-                  {permissionOptions.map((permission) => (
-                    <label
-                      key={permission.id}
-                      className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={formData.permissions.includes(permission.id)}
-                        onChange={() => togglePermission(permission.id)}
-                        className="w-4 h-4 text-[#f79421] focus:ring-[#f79421] rounded"
-                      />
-                      <span className="text-[#262262]">{permission.label}</span>
-                    </label>
-                  ))}
+                  {permissionOptions.map((permission) => {
+                    const managerOnly = managerOnlyPermissionIds.has(permission.id);
+                    const isDisabled = isLibrarianSelected && managerOnly;
+
+                    return (
+                      <label
+                        key={permission.id}
+                        className={`flex items-center gap-3 p-3 border border-gray-200 rounded-lg transition-colors ${
+                          isDisabled ? 'opacity-45 cursor-not-allowed bg-gray-50' : 'hover:bg-gray-50 cursor-pointer'
+                        }`}
+                        title={isDisabled ? 'Quyền này chỉ áp dụng cho Quản lý' : undefined}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={formData.permissions.includes(permission.id)}
+                          onChange={() => togglePermission(permission.id)}
+                          disabled={isDisabled}
+                          className="w-4 h-4 text-[#f79421] focus:ring-[#f79421] rounded"
+                        />
+                        <span className={isDisabled ? 'text-gray-500' : 'text-[#262262]'}>{permission.label}</span>
+                      </label>
+                    );
+                  })}
                 </div>
+                {isLibrarianSelected && (
+                  <p className="text-xs text-red-600 mt-2">Với vai trò Thủ thư, quyền Báo cáo và Quản lý nhân viên sẽ bị vô hiệu.</p>
+                )}
               </div>
 
               {/* Buttons */}
@@ -719,21 +754,33 @@ export default function StaffPage() {
               <div>
                 <h3 className="text-[#262262] mb-4">Phân quyền</h3>
                 <div className="space-y-2">
-                  {permissionOptions.map((permission) => (
-                    <label
-                      key={permission.id}
-                      className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={formData.permissions.includes(permission.id)}
-                        onChange={() => togglePermission(permission.id)}
-                        className="w-4 h-4 text-[#f79421] focus:ring-[#f79421] rounded"
-                      />
-                      <span className="text-[#262262]">{permission.label}</span>
-                    </label>
-                  ))}
+                  {permissionOptions.map((permission) => {
+                    const managerOnly = managerOnlyPermissionIds.has(permission.id);
+                    const isDisabled = isLibrarianSelected && managerOnly;
+
+                    return (
+                      <label
+                        key={permission.id}
+                        className={`flex items-center gap-3 p-3 border border-gray-200 rounded-lg transition-colors ${
+                          isDisabled ? 'opacity-45 cursor-not-allowed bg-gray-50' : 'hover:bg-gray-50 cursor-pointer'
+                        }`}
+                        title={isDisabled ? 'Quyền này chỉ áp dụng cho Quản lý' : undefined}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={formData.permissions.includes(permission.id)}
+                          onChange={() => togglePermission(permission.id)}
+                          disabled={isDisabled}
+                          className="w-4 h-4 text-[#f79421] focus:ring-[#f79421] rounded"
+                        />
+                        <span className={isDisabled ? 'text-gray-500' : 'text-[#262262]'}>{permission.label}</span>
+                      </label>
+                    );
+                  })}
                 </div>
+                {isLibrarianSelected && (
+                  <p className="text-xs text-red-600 mt-2">Với vai trò Thủ thư, quyền Báo cáo và Quản lý nhân viên sẽ bị vô hiệu.</p>
+                )}
               </div>
 
               {/* Buttons */}

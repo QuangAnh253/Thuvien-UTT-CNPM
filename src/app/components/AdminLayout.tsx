@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { apiFetch, clearAuth } from '../lib/auth';
+import { apiFetch, clearAuth, getUser } from '../lib/auth';
 import { useNavigate } from 'react-router';
+import { addReadNotificationId, getReadNotificationIds, saveReadNotificationIds } from '../lib/notificationReadState';
+import { preloadImage } from '../lib/imageCache';
 import {
   LayoutDashboard,
   BookOpen,
@@ -32,10 +34,20 @@ interface AdminLayoutProps {
 }
 
 export default function AdminLayout({ children, pageTitle }: AdminLayoutProps) {
+  const profileCacheKey = 'admin-profile-cache';
+  const notificationScope = 'admin-notifications';
   const location = useLocation();
   const navigate = useNavigate();
+  const currentUser = getUser();
+  const role = String(currentUser?.role || '').toLowerCase();
+  const isAdmin = role === 'admin';
+  const roleLabel = role === 'admin' ? 'Quản trị viên' : role === 'librarian' ? 'Thủ thư' : 'Nhân viên thư viện';
   const [showUserDropdown, setShowUserDropdown] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [profileName, setProfileName] = useState<string>(currentUser?.fullName || currentUser?.username || 'Người dùng');
+  const [profileEmail, setProfileEmail] = useState<string>('');
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState<string>('');
+  const visibleNavItems = navItems.filter((item) => (item.path === '/admin/staff' ? isAdmin : true));
 
   const formatDateTime = (value: any) => {
     const date = new Date(value);
@@ -57,7 +69,7 @@ export default function AdminLayout({ children, pageTitle }: AdminLayoutProps) {
           apiFetch('/api/borrow/overdue'),
         ]);
 
-        const readIds: string[] = JSON.parse(localStorage.getItem('readAdminNotifs') || '[]');
+        const readIds = await getReadNotificationIds(notificationScope);
         const generatedNotifs: Notification[] = [];
 
         if (!pendingRes?.error && Array.isArray(pendingRes)) {
@@ -101,24 +113,83 @@ export default function AdminLayout({ children, pageTitle }: AdminLayoutProps) {
     void fetchAdminNotifications();
   }, []);
 
+  useEffect(() => {
+    const cachedProfileRaw = sessionStorage.getItem(profileCacheKey);
+    if (cachedProfileRaw) {
+      try {
+        const cachedProfile = JSON.parse(cachedProfileRaw);
+        if (cachedProfile?.name) setProfileName(cachedProfile.name);
+        if (cachedProfile?.email) setProfileEmail(cachedProfile.email);
+        if (cachedProfile?.avatarUrl) {
+          setProfileAvatarUrl(cachedProfile.avatarUrl);
+          preloadImage(cachedProfile.avatarUrl);
+        }
+      } catch {
+        sessionStorage.removeItem(profileCacheKey);
+      }
+    }
+
+    const fetchProfile = async () => {
+      try {
+        const res = await apiFetch('/api/staff/me');
+        if (res && !res.error) {
+          setProfileName(res.fullName || currentUser?.fullName || currentUser?.username || 'Người dùng');
+          setProfileEmail(res.email || '');
+          setProfileAvatarUrl(res.avatarUrl || '');
+          sessionStorage.setItem(
+            profileCacheKey,
+            JSON.stringify({
+              name: res.fullName || currentUser?.fullName || currentUser?.username || 'Người dùng',
+              email: res.email || '',
+              avatarUrl: res.avatarUrl || '',
+            })
+          );
+          if (res.avatarUrl) preloadImage(res.avatarUrl);
+        } else {
+          setProfileName(currentUser?.fullName || currentUser?.username || 'Người dùng');
+          setProfileEmail('');
+          setProfileAvatarUrl('');
+          sessionStorage.removeItem(profileCacheKey);
+        }
+      } catch {
+        setProfileName(currentUser?.fullName || currentUser?.username || 'Người dùng');
+        setProfileEmail('');
+        setProfileAvatarUrl('');
+      }
+    };
+
+    void fetchProfile();
+  }, [currentUser?.fullName, currentUser?.username]);
+
+  const getInitials = (name: string) => {
+    const tokens = String(name || '')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+
+    if (!tokens.length) return 'U';
+    if (tokens.length === 1) return tokens[0].charAt(0).toUpperCase();
+
+    return `${tokens[0].charAt(0)}${tokens[tokens.length - 1].charAt(0)}`.toUpperCase();
+  };
+
+  const avatarText = getInitials(profileName);
+
   const handleLogout = () => {
     clearAuth();
+    sessionStorage.removeItem(profileCacheKey);
     navigate('/login');
   };
 
-  const handleMarkAsRead = (id: string) => {
-    const readIds: string[] = JSON.parse(localStorage.getItem('readAdminNotifs') || '[]');
-    if (!readIds.includes(id)) {
-      localStorage.setItem('readAdminNotifs', JSON.stringify([...readIds, id]));
-    }
-
+  const handleMarkAsRead = async (id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+    await addReadNotificationId(notificationScope, id);
   };
 
-  const handleMarkAllAsRead = () => {
+  const handleMarkAllAsRead = async () => {
     const allIds = notifications.map((n) => n.id);
-    localStorage.setItem('readAdminNotifs', JSON.stringify(allIds));
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    await saveReadNotificationIds(notificationScope, allIds);
   };
 
   return (
@@ -138,7 +209,7 @@ export default function AdminLayout({ children, pageTitle }: AdminLayoutProps) {
 
         <nav className="flex-1 p-4">
           <ul className="space-y-1">
-            {navItems.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
               return (
@@ -165,12 +236,16 @@ export default function AdminLayout({ children, pageTitle }: AdminLayoutProps) {
             to="/admin/profile"
             className="flex items-center gap-3 p-3 rounded-lg hover:bg-white/5 transition-colors"
           >
-            <div className="w-10 h-10 rounded-full bg-[#f79421] flex items-center justify-center">
-              <span className="text-white">AD</span>
+            <div className="w-10 h-10 rounded-full bg-[#f79421] flex items-center justify-center overflow-hidden">
+              {profileAvatarUrl ? (
+                <img src={profileAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-white">{avatarText}</span>
+              )}
             </div>
             <div>
-              <p className="text-white text-sm">Admin User</p>
-              <p className="text-white/60 text-xs">admin@utt.edu.vn</p>
+              <p className="text-white text-sm">{profileName}</p>
+              <p className="text-white/60 text-xs">{profileEmail || roleLabel}</p>
             </div>
           </Link>
 
@@ -203,8 +278,12 @@ export default function AdminLayout({ children, pageTitle }: AdminLayoutProps) {
                   onClick={() => setShowUserDropdown(!showUserDropdown)}
                   className="flex items-center gap-2 hover:bg-gray-100 rounded-lg p-2 transition-colors"
                 >
-                  <div className="w-10 h-10 rounded-full bg-[#f79421] flex items-center justify-center">
-                    <span className="text-white">AD</span>
+                  <div className="w-10 h-10 rounded-full bg-[#f79421] flex items-center justify-center overflow-hidden">
+                    {profileAvatarUrl ? (
+                      <img src={profileAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-white">{avatarText}</span>
+                    )}
                   </div>
                   <ChevronDown className="w-4 h-4 text-gray-600" />
                 </button>

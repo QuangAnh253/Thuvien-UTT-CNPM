@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import NotificationDropdown, { Notification } from './NotificationDropdown';
 import { apiFetch } from '../lib/auth';
 import { useAuth } from '../lib/useAuth';
+import { addReadNotificationId, getReadNotificationIds, saveReadNotificationIds } from '../lib/notificationReadState';
 
 interface BorrowHistory {
   id: string;
@@ -17,6 +18,7 @@ interface BorrowHistory {
 }
 
 export default function StudentHistoryPage() {
+  const notificationScope = 'student-notifications';
   const { logout } = useAuth();
   const [filterStatus, setFilterStatus] = useState('all');
   const [dateFrom, setDateFrom] = useState('');
@@ -65,7 +67,24 @@ export default function StudentHistoryPage() {
     borrowDate: item.borrowDate ? new Date(item.borrowDate).toLocaleDateString('vi-VN') : '—',
     dueDate: item.dueDate ? new Date(item.dueDate).toLocaleDateString('vi-VN') : '—',
     returnDate: item.returnDate ? new Date(item.returnDate).toLocaleDateString('vi-VN') : null,
-    fine: Number(item.fine ?? item.fineAmount ?? 0),
+    fine: (() => {
+      const fineFromReturnRecord = Number(item.returnRecord?.fineAmount ?? 0);
+      if (fineFromReturnRecord > 0) return fineFromReturnRecord;
+
+      const fineFromBorrow = Number(item.fine ?? item.fineAmount ?? 0);
+      if (fineFromBorrow > 0) return fineFromBorrow;
+
+      if (!item.dueDate || !item.returnDate) return 0;
+
+      const dueDate = new Date(item.dueDate);
+      const returnDate = new Date(item.returnDate);
+      if (Number.isNaN(dueDate.getTime()) || Number.isNaN(returnDate.getTime())) return 0;
+
+      const dueStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+      const returnStart = new Date(returnDate.getFullYear(), returnDate.getMonth(), returnDate.getDate());
+      const overdueDays = Math.max(0, Math.floor((returnStart.getTime() - dueStart.getTime()) / (1000 * 60 * 60 * 24)));
+      return overdueDays * 5000;
+    })(),
     status: (() => {
       const upperStatus = String(item.status || '').toUpperCase();
       if (item.returnDate || upperStatus === 'RETURNED') return 'returned';
@@ -129,7 +148,7 @@ export default function StudentHistoryPage() {
           apiFetch('/api/student/pending-requests'),
         ]);
 
-        const readIds = JSON.parse(localStorage.getItem('readStudentNotifs') || '[]');
+        const readIds = await getReadNotificationIds(notificationScope);
         const today = new Date();
         const generatedNotifs: Notification[] = [];
 
@@ -194,18 +213,15 @@ export default function StudentHistoryPage() {
     void fetchStudentNotifications();
   }, []);
 
-  const handleMarkAsRead = (id: string) => {
-    const readIds = JSON.parse(localStorage.getItem('readStudentNotifs') || '[]');
-    if (!readIds.includes(id)) {
-      localStorage.setItem('readStudentNotifs', JSON.stringify([...readIds, id]));
-    }
+  const handleMarkAsRead = async (id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
+    await addReadNotificationId(notificationScope, id);
   };
 
-  const handleMarkAllAsRead = () => {
+  const handleMarkAllAsRead = async () => {
     const allIds = notifications.map(n => n.id);
-    localStorage.setItem('readStudentNotifs', JSON.stringify(allIds));
     setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    await saveReadNotificationIds(notificationScope, allIds);
   };
 
   const totalPages = Math.ceil(historyData.length / itemsPerPage);

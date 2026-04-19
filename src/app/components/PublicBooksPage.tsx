@@ -3,6 +3,7 @@ import { Search, BookOpen, LogIn } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { isLoggedIn, getUser, clearAuth, apiFetch } from '../lib/auth';
 import NotificationDropdown, { Notification } from './NotificationDropdown';
+import { addReadNotificationId, getReadNotificationIds, saveReadNotificationIds } from '../lib/notificationReadState';
 
 interface Book {
   id: string;
@@ -19,13 +20,27 @@ const categories = [
   'Tất cả',
   'Công nghệ thông tin',
   'Kinh tế',
-  'Văn học',
-  'Khoa học',
+  'Văn Học',
+  'Khoa học tự nhiên',
+  'Kỹ Thuật',
   'Lịch sử',
   'Ngoại ngữ',
 ];
 
+const normalizeCategory = (value: string): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Tất cả';
+
+  const normalized = raw.toLowerCase();
+  if (normalized === 'văn học') return 'Văn Học';
+  if (normalized === 'khoa học') return 'Khoa học tự nhiên';
+  if (normalized === 'khoa học tự nhiên') return 'Khoa học tự nhiên';
+  if (normalized === 'kỹ thuật' || normalized === 'ky thuat') return 'Kỹ Thuật';
+  return raw;
+};
+
 export default function PublicBooksPage() {
+  const notificationScope = 'student-notifications';
   const navigate = useNavigate();
   const location = useLocation();
   const loggedIn = isLoggedIn();
@@ -66,10 +81,10 @@ export default function PublicBooksPage() {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const q = params.get('q') ?? '';
-    const category = params.get('category') ?? 'Tất cả';
+    const category = normalizeCategory(params.get('category') ?? 'Tất cả');
 
     setSearchQuery(q);
-    setSelectedCategory(category);
+    setSelectedCategory(categories.includes(category) ? category : 'Tất cả');
   }, [location.search]);
 
   useEffect(() => {
@@ -89,7 +104,7 @@ export default function PublicBooksPage() {
           apiFetch('/api/student/pending-requests'),
         ]);
 
-        const readIds = JSON.parse(localStorage.getItem('readStudentNotifs') || '[]');
+        const readIds = await getReadNotificationIds(notificationScope);
         const today = new Date();
         const generatedNotifs: Notification[] = [];
 
@@ -154,19 +169,15 @@ export default function PublicBooksPage() {
     void fetchStudentNotifications();
   }, [loggedIn, user?.role]);
 
-  const handleMarkAsRead = (id: string) => {
-    const readIds = JSON.parse(localStorage.getItem('readStudentNotifs') || '[]');
-    if (!readIds.includes(id)) {
-      localStorage.setItem('readStudentNotifs', JSON.stringify([...readIds, id]));
-    }
-
+  const handleMarkAsRead = async (id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+    await addReadNotificationId(notificationScope, id);
   };
 
-  const handleMarkAllAsRead = () => {
+  const handleMarkAllAsRead = async () => {
     const allIds = notifications.map((n) => n.id);
-    localStorage.setItem('readStudentNotifs', JSON.stringify(allIds));
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    await saveReadNotificationIds(notificationScope, allIds);
   };
 
   const fetchBooks = async () => {
@@ -275,7 +286,6 @@ export default function PublicBooksPage() {
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="px-4 py-3 border-r border-gray-200 focus:outline-none text-[#262262] bg-transparent"
             >
-              <option>Tất cả</option>
               {categories.map((cat) => (
                 <option key={cat}>{cat}</option>
               ))}

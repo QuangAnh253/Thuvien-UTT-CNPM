@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router';
 import NotificationDropdown, { Notification } from './NotificationDropdown';
 import { apiFetch } from '../lib/auth';
 import { useAuth } from '../lib/useAuth';
+import { addReadNotificationId, getReadNotificationIds, saveReadNotificationIds } from '../lib/notificationReadState';
 
 interface BorrowedBook {
   id: string;
@@ -31,9 +32,11 @@ interface RecentBorrow {
 }
 
 export default function StudentDashboard() {
+  const notificationScope = 'student-notifications';
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
+  const [studentCode, setStudentCode] = useState('');
   const [currentlyBorrowed, setCurrentlyBorrowed] = useState<BorrowedBook[]>([]);
   const [onlineRequests, setOnlineRequests] = useState<OnlineRequest[]>([]);
   const [recentBorrows, setRecentBorrows] = useState<RecentBorrow[]>([]);
@@ -134,15 +137,19 @@ export default function StudentDashboard() {
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
-        const [borrowsRes, requestsRes, histRes] = await Promise.all([
+        const [profileRes, borrowsRes, requestsRes, histRes] = await Promise.all([
+          apiFetch('/api/student/profile'),
           apiFetch('/api/student/current-borrows'),
           apiFetch('/api/student/pending-requests'),
           apiFetch('/api/student/history?limit=4'),
         ]);
 
+        const profile = Array.isArray(profileRes) ? profileRes[0] : profileRes;
+        setStudentCode(profile?.studentCode || user?.studentCode || user?.studentId || user?.student?.studentCode || '');
+
         const currentBorrows = extractList(borrowsRes);
         const pendingRequests = extractList(requestsRes);
-        const readIds = JSON.parse(localStorage.getItem('readStudentNotifs') || '[]');
+        const readIds = await getReadNotificationIds(notificationScope);
         const today = new Date();
 
         setCurrentlyBorrowed(currentBorrows.map(mapCurrentBorrow));
@@ -151,7 +158,7 @@ export default function StudentDashboard() {
           const upperStatus = String(item.status || '').toUpperCase();
           return upperStatus !== 'PENDING' && upperStatus !== 'REJECTED';
         });
-        setRecentBorrows(filteredRecent.map(mapRecentBorrow));
+        setRecentBorrows(filteredRecent.map(mapRecentBorrow).slice(0, 10));
 
         let generatedNotifs: Notification[] = [];
 
@@ -216,19 +223,15 @@ export default function StudentDashboard() {
     void fetchDashboardData();
   }, []);
 
-  const handleMarkAsRead = (id: string) => {
-    const readIds = JSON.parse(localStorage.getItem('readStudentNotifs') || '[]');
-    if (!readIds.includes(id)) {
-      localStorage.setItem('readStudentNotifs', JSON.stringify([...readIds, id]));
-    }
-
+  const handleMarkAsRead = async (id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
+    await addReadNotificationId(notificationScope, id);
   };
 
-  const handleMarkAllAsRead = () => {
+  const handleMarkAllAsRead = async () => {
     const allIds = notifications.map(n => n.id);
-    localStorage.setItem('readStudentNotifs', JSON.stringify(allIds));
     setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    await saveReadNotificationIds(notificationScope, allIds);
   };
 
   const getStatusBadge = (status: 'pending' | 'approved' | 'rejected') => {
@@ -245,7 +248,7 @@ export default function StudentDashboard() {
     };
 
     return (
-      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${styles[status]}`}>
+      <span className={`inline-flex items-center justify-center whitespace-nowrap min-w-[92px] px-3 py-1 rounded-full text-xs font-semibold ${styles[status]}`}>
         {labels[status]}
       </span>
     );
@@ -370,7 +373,7 @@ export default function StudentDashboard() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-3xl mb-2">Xin chào, {user?.fullName || user?.username}</h1>
-              <p className="text-white/80">Mã sinh viên: {user?.studentId || ''}</p>
+              <p className="text-white/80">Mã sinh viên: {studentCode || user?.studentCode || user?.studentId || user?.student?.studentCode || ''}</p>
             </div>
             <div className="bg-white/10 backdrop-blur-sm rounded-lg px-6 py-4">
               <div className="flex items-center gap-3">
@@ -497,18 +500,18 @@ export default function StudentDashboard() {
                 <thead className="border-b border-gray-200">
                   <tr>
                     <th className="px-4 py-3 text-left text-sm text-gray-600">Tên sách</th>
-                    <th className="px-4 py-3 text-left text-sm text-gray-600">Ngày mượn</th>
-                    <th className="px-4 py-3 text-left text-sm text-gray-600">Ngày trả</th>
-                    <th className="px-4 py-3 text-left text-sm text-gray-600">Trạng thái</th>
+                    <th className="px-4 py-3 text-left text-sm text-gray-600 whitespace-nowrap">Ngày mượn</th>
+                    <th className="px-4 py-3 text-left text-sm text-gray-600 whitespace-nowrap">Ngày trả</th>
+                    <th className="px-4 py-3 text-left text-sm text-gray-600 whitespace-nowrap w-[120px]">Trạng thái</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {recentBorrows.map((borrow) => (
                     <tr key={borrow.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 text-[#262262]">{borrow.bookTitle}</td>
-                      <td className="px-4 py-3 text-sm text-gray-600">{borrow.borrowDate}</td>
-                      <td className="px-4 py-3 text-sm text-gray-600">{borrow.returnDate}</td>
-                      <td className="px-4 py-3">{getReturnStatusBadge(borrow.status)}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{borrow.borrowDate}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{borrow.returnDate}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">{getReturnStatusBadge(borrow.status)}</td>
                     </tr>
                   ))}
                 </tbody>
