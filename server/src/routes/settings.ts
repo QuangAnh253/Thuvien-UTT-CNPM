@@ -74,6 +74,24 @@ const parseDateOnly = (value: unknown): Date | null => {
   return date;
 };
 
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+};
+
+const expandDateRange = (startDate: Date, endDate: Date) => {
+  const result: Date[] = [];
+  let cursor = new Date(startDate);
+
+  while (cursor.getTime() <= endDate.getTime()) {
+    result.push(new Date(cursor));
+    cursor = addDays(cursor, 1);
+  }
+
+  return result;
+};
+
 const toDateOnlyString = (date: Date) => {
   const year = date.getUTCFullYear();
   const month = String(date.getUTCMonth() + 1).padStart(2, '0');
@@ -209,18 +227,36 @@ router.post('/holidays/bulk', authenticateToken, async (req: any, res: any) => {
     }
 
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
-    if (items.length === 0) {
-      return res.status(400).json({ error: 'Danh sách ngày nghỉ trống' });
-    }
+    const rangeName = String(req.body?.name || '').trim();
+    const startDate = parseDateOnly(req.body?.startDate);
+    const endDate = parseDateOnly(req.body?.endDate);
 
-    const normalized = items.map((item: any, index: number) => {
-      const date = parseDateOnly(item?.date);
-      const name = String(item?.name || '').trim();
-      if (!date || !name) {
-        throw new Error(`Dữ liệu không hợp lệ tại phần tử ${index + 1}`);
+    let normalized: Array<{ date: Date; name: string }> = [];
+
+    if (items.length > 0) {
+      normalized = items.map((item: any, index: number) => {
+        const date = parseDateOnly(item?.date);
+        const name = String(item?.name || '').trim();
+        if (!date || !name) {
+          throw new Error(`Dữ liệu không hợp lệ tại phần tử ${index + 1}`);
+        }
+        return { date, name };
+      });
+    } else if (startDate && endDate) {
+      if (startDate.getTime() > endDate.getTime()) {
+        return res.status(400).json({ error: 'Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc' });
       }
-      return { date, name };
-    });
+      if (!rangeName) {
+        return res.status(400).json({ error: 'Vui lòng nhập tên cho khoảng ngày nghỉ' });
+      }
+
+      normalized = expandDateRange(startDate, endDate).map((date) => ({
+        date,
+        name: rangeName,
+      }));
+    } else {
+      return res.status(400).json({ error: 'Danh sách ngày nghỉ trống hoặc thiếu khoảng ngày' });
+    }
 
     await prisma.$transaction(
       normalized.map((item) =>

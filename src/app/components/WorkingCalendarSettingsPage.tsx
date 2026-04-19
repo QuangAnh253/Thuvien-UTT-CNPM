@@ -22,6 +22,8 @@ export default function WorkingCalendarSettingsPage() {
   const [year, setYear] = useState(currentYear);
   const [holidays, setHolidays] = useState<HolidayItem[]>([]);
   const [holidayDate, setHolidayDate] = useState('');
+  const [holidayRangeStart, setHolidayRangeStart] = useState('');
+  const [holidayRangeEnd, setHolidayRangeEnd] = useState('');
   const [holidayName, setHolidayName] = useState('');
 
   const sortedHolidays = useMemo(
@@ -104,6 +106,42 @@ export default function WorkingCalendarSettingsPage() {
     setSaving(false);
   };
 
+  const handleAddHolidayRange = async () => {
+    if (!holidayRangeStart || !holidayRangeEnd || !holidayName.trim()) {
+      setMessage('Vui lòng nhập đủ ngày bắt đầu, ngày kết thúc và tên ngày nghỉ.');
+      return;
+    }
+
+    if (holidayRangeStart > holidayRangeEnd) {
+      setMessage('Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.');
+      return;
+    }
+
+    setSaving(true);
+    setMessage('');
+
+    const res = await apiFetch('/api/settings/holidays/bulk', {
+      method: 'POST',
+      body: JSON.stringify({
+        startDate: holidayRangeStart,
+        endDate: holidayRangeEnd,
+        name: holidayName.trim(),
+      }),
+    });
+
+    if (res?.error) {
+      setMessage(res.error);
+    } else {
+      setHolidayRangeStart('');
+      setHolidayRangeEnd('');
+      setHolidayName('');
+      setMessage('Đã thêm khoảng ngày nghỉ.');
+      await fetchCalendar();
+    }
+
+    setSaving(false);
+  };
+
   const handleDeleteHoliday = async (id: number) => {
     setSaving(true);
     setMessage('');
@@ -180,7 +218,83 @@ export default function WorkingCalendarSettingsPage() {
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <div className="flex flex-col md:flex-row md:items-end gap-3 mb-4">
+          <div className="space-y-4 mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <label>
+                <span className="block text-sm text-gray-600 mb-1">Ngày nghỉ đơn lẻ</span>
+                <input
+                  type="date"
+                  value={holidayDate}
+                  onChange={(e) => setHolidayDate(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                />
+              </label>
+
+              <label>
+                <span className="block text-sm text-gray-600 mb-1">Tên ngày nghỉ</span>
+                <input
+                  type="text"
+                  value={holidayName}
+                  onChange={(e) => setHolidayName(e.target.value)}
+                  placeholder="Ví dụ: Giỗ Tổ Hùng Vương"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                />
+              </label>
+
+              <div className="flex items-end">
+                <button
+                  onClick={handleAddHoliday}
+                  disabled={saving || loading}
+                  className="w-full px-4 py-2 rounded-lg bg-[#f79421] text-white disabled:opacity-50"
+                >
+                  Thêm ngày nghỉ
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 rounded-lg border border-gray-200 p-4 bg-gray-50">
+              <label>
+                <span className="block text-sm text-gray-600 mb-1">Từ ngày</span>
+                <input
+                  type="date"
+                  value={holidayRangeStart}
+                  onChange={(e) => setHolidayRangeStart(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 bg-white"
+                />
+              </label>
+
+              <label>
+                <span className="block text-sm text-gray-600 mb-1">Đến ngày</span>
+                <input
+                  type="date"
+                  value={holidayRangeEnd}
+                  onChange={(e) => setHolidayRangeEnd(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 bg-white"
+                />
+              </label>
+
+              <label className="md:col-span-1">
+                <span className="block text-sm text-gray-600 mb-1">Tên khoảng nghỉ</span>
+                <input
+                  type="text"
+                  value={holidayName}
+                  onChange={(e) => setHolidayName(e.target.value)}
+                  placeholder="Ví dụ: Nghỉ lễ 30/4 - 1/5"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 bg-white"
+                />
+              </label>
+
+              <div className="flex items-end">
+                <button
+                  onClick={handleAddHolidayRange}
+                  disabled={saving || loading}
+                  className="w-full px-4 py-2 rounded-lg bg-[#262262] text-white disabled:opacity-50"
+                >
+                  Thêm khoảng ngày
+                </button>
+              </div>
+            </div>
+
             <label>
               <span className="block text-sm text-gray-600 mb-1">Năm</span>
               <input
@@ -190,35 +304,6 @@ export default function WorkingCalendarSettingsPage() {
                 className="border border-gray-300 rounded-lg px-3 py-2 w-36"
               />
             </label>
-
-            <label className="flex-1">
-              <span className="block text-sm text-gray-600 mb-1">Ngày nghỉ (YYYY-MM-DD)</span>
-              <input
-                type="date"
-                value={holidayDate}
-                onChange={(e) => setHolidayDate(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2"
-              />
-            </label>
-
-            <label className="flex-1">
-              <span className="block text-sm text-gray-600 mb-1">Tên ngày nghỉ</span>
-              <input
-                type="text"
-                value={holidayName}
-                onChange={(e) => setHolidayName(e.target.value)}
-                placeholder="Ví dụ: Giỗ Tổ Hùng Vương"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2"
-              />
-            </label>
-
-            <button
-              onClick={handleAddHoliday}
-              disabled={saving || loading}
-              className="px-4 py-2 rounded-lg bg-[#f79421] text-white disabled:opacity-50"
-            >
-              Thêm ngày nghỉ
-            </button>
           </div>
 
           <div className="rounded-lg border border-gray-200 overflow-hidden">
