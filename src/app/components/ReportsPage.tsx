@@ -19,6 +19,14 @@ type ExportBorrow = {
   user?: { student?: { fullName?: string; studentCode?: string } };
 };
 
+type CategoryDistributionItem = {
+  name?: string;
+  category?: string;
+  value?: number;
+  borrowCount?: number;
+  count?: number;
+};
+
 export default function ReportsPage() {
   const [dateFrom, setDateFrom] = useState('2026-01-01');
   const [dateTo, setDateTo] = useState('2026-12-31');
@@ -74,19 +82,31 @@ export default function ReportsPage() {
 
   const finePerDay = 5000;
 
+  const buildCategoryDistribution = (rows: ExportBorrow[]) => {
+    const categoryMap = new Map<string, number>();
+    rows.forEach((row) => {
+      const category = String(row.book?.category || 'Khác').trim() || 'Khác';
+      categoryMap.set(category, (categoryMap.get(category) || 0) + 1);
+    });
+    return Array.from(categoryMap.entries()).map(([name, value]) => ({ name, value }));
+  };
+
   useEffect(() => {
     const fetchReports = async () => {
       setLoading(true);
       try {
-        const [statsRes, chartRes, readersRes, booksRes, exportRes] = await Promise.all([
+        const [statsRes, chartRes, readersRes, booksRes, categoryRes, exportRes] = await Promise.all([
           apiFetch('/api/reports/stats'),
           apiFetch(`/api/reports/borrow-by-month?period=${chartPeriod}`),
           apiFetch('/api/reports/top-readers'),
           apiFetch('/api/reports/top-books'),
+          apiFetch('/api/reports/category-distribution'),
           apiFetch('/api/reports/export-data'),
         ]);
 
         const exportData = extractList(exportRes) as ExportBorrow[];
+        const categoryDataRaw = extractList(categoryRes) as CategoryDistributionItem[];
+        const categoryData = categoryDataRaw.length > 0 ? categoryDataRaw : buildCategoryDistribution(exportData);
 
         const totalBooks = Number(statsRes?.totalBooks ?? 0);
         const borrowing = Number(statsRes?.borrowing ?? exportData.filter((b) => b.status === 'BORROWING').length);
@@ -95,7 +115,7 @@ export default function ReportsPage() {
 
         const overdueRows = exportData
           .filter((b) => !b.returnDate && getOverdueDays(b.dueDate) > 0)
-          .map((b, idx) => {
+          .map((b) => {
             const overdueDays = getOverdueDays(b.dueDate);
             return {
               id: String(b.id),
@@ -109,7 +129,7 @@ export default function ReportsPage() {
           .sort((a, b) => b.overdueDays - a.overdueDays)
           .slice(0, 10);
 
-        const fineCollected = overdueRows.reduce((sum, item) => sum + item.fine, 0);
+        const fineCollected = Number(statsRes?.fineCollected ?? overdueRows.reduce((sum, item) => sum + item.fine, 0));
 
         const returnedCount = exportData.filter((b) => b.status === 'RETURNED' || b.returnDate).length;
         const onTimeCount = exportData.filter((b) => {
@@ -152,15 +172,14 @@ export default function ReportsPage() {
         }));
         setTopBooks(mappedTopBooks);
 
-        const categoryMap = new Map<string, number>();
-        mappedTopBooks.forEach((b: { category: string; borrowCount: number }) => {
-          categoryMap.set(b.category, (categoryMap.get(b.category) || 0) + b.borrowCount);
-        });
-        const colors = ['#f79421', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
+        const colors = ['#f79421', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#14b8a6', '#ec4899'];
         setDonutChartData(
-          Array.from(categoryMap.entries())
-            .slice(0, 6)
-            .map(([name, value], idx) => ({ id: `cat${idx + 1}`, name, value, color: colors[idx % colors.length] }))
+          categoryData.map((item: any, idx: number) => ({
+            id: `cat${idx + 1}`,
+            name: item.name || item.category || 'Khác',
+            value: Number(item.value ?? item.borrowCount ?? item.count ?? 0),
+            color: colors[idx % colors.length],
+          }))
         );
       } catch (error) {
         console.error('Lỗi tải báo cáo:', error);
@@ -251,7 +270,6 @@ export default function ReportsPage() {
   return (
     <AdminLayout pageTitle="Báo cáo & Thống kê">
       <div className="space-y-6">
-        {/* Analytics Badge */}
         <div className="flex items-center gap-2">
           <div className="bg-purple-100 border border-purple-300 text-purple-700 px-3 py-1 rounded-full text-xs flex items-center gap-1">
             <BarChart3 className="w-3 h-3" />
@@ -259,10 +277,8 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Top Filter Bar */}
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <div className="flex flex-wrap items-center gap-4">
-            {/* Date Range */}
             <div className="flex items-center gap-2">
               <div>
                 <label className="block mb-1 text-xs text-gray-500">Từ ngày</label>
@@ -291,7 +307,6 @@ export default function ReportsPage() {
               </div>
             </div>
 
-            {/* Quick Period */}
             <div>
               <label className="block mb-1 text-xs text-gray-500">Kỳ báo cáo</label>
               <select
@@ -305,7 +320,6 @@ export default function ReportsPage() {
               </select>
             </div>
 
-            {/* Export Actions */}
             <div className="ml-auto flex items-end gap-2">
               <button
                 onClick={handleExportPDF}
@@ -325,9 +339,7 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Total Books */}
           <div className="bg-white rounded-lg border border-gray-200 p-6 hover:border-[#f79421] transition-colors">
             <div className="flex items-center justify-between mb-3">
               <div className="w-12 h-12 bg-[#f79421]/10 rounded-lg flex items-center justify-center">
@@ -340,7 +352,6 @@ export default function ReportsPage() {
             <p className="text-xs text-green-500 mt-2">+12% so với kỳ trước</p>
           </div>
 
-          {/* Borrow Count */}
           <div className="bg-white rounded-lg border border-gray-200 p-6 hover:border-[#f79421] transition-colors">
             <div className="flex items-center justify-between mb-3">
               <div className="w-12 h-12 bg-[#f79421]/10 rounded-lg flex items-center justify-center">
@@ -353,7 +364,6 @@ export default function ReportsPage() {
             <p className="text-xs text-green-500 mt-2">+8% so với kỳ trước</p>
           </div>
 
-          {/* Fine Collected */}
           <div className="bg-white rounded-lg border border-gray-200 p-6 hover:border-[#f79421] transition-colors">
             <div className="flex items-center justify-between mb-3">
               <div className="w-12 h-12 bg-[#f79421]/10 rounded-lg flex items-center justify-center">
@@ -365,7 +375,6 @@ export default function ReportsPage() {
             <p className="text-xs text-gray-500 mt-2">Tháng này</p>
           </div>
 
-          {/* On-time Rate */}
           <div className="bg-white rounded-lg border border-gray-200 p-6 hover:border-[#f79421] transition-colors">
             <div className="flex items-center justify-between mb-3">
               <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
@@ -379,9 +388,7 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Chart Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Line Chart */}
           <div className="bg-white rounded-lg border border-gray-200 p-6">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-lg text-[#262262]">Lượt mượn theo thời gian</h3>
@@ -389,9 +396,7 @@ export default function ReportsPage() {
                 <button
                   onClick={() => setChartPeriod('day')}
                   className={`px-3 py-1 rounded text-xs transition-colors ${
-                    chartPeriod === 'day'
-                      ? 'bg-[#f79421] text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    chartPeriod === 'day' ? 'bg-[#f79421] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
                   Ngày
@@ -399,9 +404,7 @@ export default function ReportsPage() {
                 <button
                   onClick={() => setChartPeriod('month')}
                   className={`px-3 py-1 rounded text-xs transition-colors ${
-                    chartPeriod === 'month'
-                      ? 'bg-[#f79421] text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    chartPeriod === 'month' ? 'bg-[#f79421] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
                   Tháng
@@ -409,9 +412,7 @@ export default function ReportsPage() {
                 <button
                   onClick={() => setChartPeriod('year')}
                   className={`px-3 py-1 rounded text-xs transition-colors ${
-                    chartPeriod === 'year'
-                      ? 'bg-[#f79421] text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    chartPeriod === 'year' ? 'bg-[#f79421] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
                   Năm
@@ -444,7 +445,6 @@ export default function ReportsPage() {
             </ResponsiveContainer>
           </div>
 
-          {/* Donut Chart */}
           <div className="bg-white rounded-lg border border-gray-200 p-6">
             <h3 className="text-lg text-[#262262] mb-6">Phân bổ theo thể loại</h3>
             <ResponsiveContainer width="100%" height={300}>
@@ -486,9 +486,7 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Top 10 Tables */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Top Readers */}
           <div className="bg-white rounded-lg border border-gray-200">
             <div className="p-6 border-b border-gray-200">
               <h3 className="text-lg text-[#262262]">Top 10 Độc giả</h3>
@@ -519,7 +517,6 @@ export default function ReportsPage() {
             </div>
           </div>
 
-          {/* Top Books */}
           <div className="bg-white rounded-lg border border-gray-200">
             <div className="p-6 border-b border-gray-200">
               <h3 className="text-lg text-[#262262]">Top 10 Sách được mượn</h3>
@@ -551,7 +548,6 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Overdue List */}
         <div className="bg-white rounded-lg border border-gray-200">
           <div className="p-6 border-b border-gray-200">
             <h3 className="text-lg text-[#262262]">Danh sách quá hạn</h3>
@@ -569,19 +565,14 @@ export default function ReportsPage() {
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {overdueList.map((record) => (
-                  <tr
-                    key={record.id}
-                    className="bg-red-50 hover:bg-[#f79421]/10 transition-colors"
-                  >
+                  <tr key={record.id} className="bg-red-50 hover:bg-[#f79421]/10 transition-colors">
                     <td className="px-6 py-4 text-[#262262]">{record.readerName}</td>
                     <td className="px-6 py-4 text-gray-600">{record.studentId}</td>
                     <td className="px-6 py-4 text-gray-600">{record.bookName}</td>
                     <td className="px-6 py-4">
                       <span className="text-red-500 font-semibold">{record.overdueDays} ngày</span>
                     </td>
-                    <td className="px-6 py-4 text-red-500 font-semibold">
-                      {formatCurrency(record.fine)}
-                    </td>
+                    <td className="px-6 py-4 text-red-500 font-semibold">{formatCurrency(record.fine)}</td>
                   </tr>
                 ))}
               </tbody>

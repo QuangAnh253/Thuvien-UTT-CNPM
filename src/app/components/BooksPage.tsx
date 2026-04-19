@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Search, Plus, Pencil, Trash2, AlertTriangle, X } from 'lucide-react';
 import { Link } from 'react-router';
 import AdminLayout from './AdminLayout';
-import { apiFetch } from '../lib/auth';
+import { apiFetch, getToken } from '../lib/auth';
 
 interface Book {
   id: string | number;
@@ -17,14 +17,29 @@ interface Book {
   availableQty: number;
 }
 
-const categories = [
+const defaultCategories = [
   'Tất cả',
   'Công nghệ thông tin',
   'Kinh tế',
-  'Văn học',
-  'Khoa học',
+  'Văn Học',
+  'Khoa học tự nhiên',
+  'Kỹ Thuật',
   'Lịch sử',
+  'Ngoại ngữ',
 ];
+
+const normalizeCategory = (value: string): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return raw;
+
+  const normalized = raw.toLowerCase();
+  if (normalized === 'văn học') return 'Văn Học';
+  if (normalized === 'khoa học') return 'Khoa học tự nhiên';
+  if (normalized === 'khoa học tự nhiên') return 'Khoa học tự nhiên';
+  if (normalized === 'kỹ thuật') return 'Kỹ Thuật';
+  if (normalized === 'ky thuat') return 'Kỹ Thuật';
+  return raw;
+};
 
 export default function BooksPage() {
   const [books, setBooks] = useState<Book[]>([]);
@@ -49,7 +64,17 @@ export default function BooksPage() {
     totalQty: 1,
   });
 
-  const token = localStorage.getItem('token');
+  const categoryOptions = Array.from(
+    new Set([
+      ...defaultCategories.filter((c) => c !== 'Tất cả'),
+      ...books.map((book) => normalizeCategory(book.category)).filter(Boolean),
+      normalizeCategory(String(formData.category || '').trim()),
+    ])
+  );
+
+  const filterCategories = ['Tất cả', ...categoryOptions];
+
+  const token = getToken();
 
   useEffect(() => {
     const fetchBooks = async () => {
@@ -73,7 +98,11 @@ export default function BooksPage() {
         }
 
         const bookList = Array.isArray(res) ? res : (res?.books ?? []);
-        setBooks(bookList);
+        const normalizedBooks = bookList.map((book: any) => ({
+          ...book,
+          category: normalizeCategory(String(book?.category || '')),
+        }));
+        setBooks(normalizedBooks);
       } catch {
         alert('Không thể kết nối tới máy chủ');
         setBooks([]);
@@ -131,7 +160,11 @@ export default function BooksPage() {
       }
 
       const bookList = Array.isArray(res) ? res : (res?.books ?? []);
-      setBooks(bookList);
+      const normalizedBooks = bookList.map((book: any) => ({
+        ...book,
+        category: normalizeCategory(String(book?.category || '')),
+      }));
+      setBooks(normalizedBooks);
     } catch {
       alert('Không thể kết nối tới máy chủ');
       setBooks([]);
@@ -227,7 +260,7 @@ export default function BooksPage() {
             onChange={(e) => setSelectedCategory(e.target.value)}
             className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent bg-white min-w-[200px]"
           >
-            {categories.map((category) => (
+            {filterCategories.map((category) => (
               <option key={category} value={category}>
                 {category}
               </option>
@@ -465,7 +498,7 @@ export default function BooksPage() {
                   onChange={(e) => setFormData({ ...formData, category: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent bg-white"
                 >
-                  {categories.filter((c) => c !== 'Tất cả').map((category) => (
+                  {categoryOptions.map((category) => (
                     <option key={category} value={category}>
                       {category}
                     </option>

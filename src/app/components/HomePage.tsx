@@ -11,7 +11,16 @@ interface FeaturedBook {
   imageUrl?: string;
 }
 
-const categories = ['Tất cả', 'Công nghệ thông tin', 'Kinh tế', 'Văn học', 'Khoa học'];
+const categories = [
+  'Tất cả',
+  'Công nghệ thông tin',
+  'Kinh tế',
+  'Văn Học',
+  'Khoa học tự nhiên',
+  'Kỹ Thuật',
+  'Lịch sử',
+  'Ngoại ngữ',
+];
 const fallbackCoverColors = ['#3b82f6', '#8b5cf6', '#06b6d4', '#10b981'];
 
 export default function HomePage() {
@@ -34,11 +43,11 @@ export default function HomePage() {
   useEffect(() => {
     const fetchFeaturedBooks = async () => {
       try {
-        const res = await apiFetch('/api/books');
+        const res = await apiFetch('/api/books/featured');
         const list = (Array.isArray(res) ? res : []) || [];
 
         setFeaturedBooks(
-          list.slice(0, 4).map((book: any) => ({
+          list.map((book: any) => ({
             id: String(book.id),
             title: book.title || 'N/A',
             author: book.author || 'N/A',

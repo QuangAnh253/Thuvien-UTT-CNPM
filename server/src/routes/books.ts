@@ -4,6 +4,26 @@ import { authenticateToken } from '../middleware/auth';
 
 const router = express.Router();
 
+const getCategoryAliases = (category: string): string[] => {
+  const normalized = String(category || '').trim().toLowerCase();
+  if (!normalized) return [];
+
+  const aliasMap: Record<string, string[]> = {
+    'công nghệ thông tin': ['Công nghệ thông tin'],
+    'kinh tế': ['Kinh tế'],
+    'văn học': ['Văn Học', 'Văn học'],
+    'van hoc': ['Văn Học', 'Văn học'],
+    'khoa học tự nhiên': ['Khoa học tự nhiên', 'Khoa học'],
+    'khoa học': ['Khoa học tự nhiên', 'Khoa học'],
+    'kỹ thuật': ['Kỹ Thuật', 'Kỹ thuật'],
+    'ky thuat': ['Kỹ Thuật', 'Kỹ thuật'],
+    'lịch sử': ['Lịch sử'],
+    'ngoại ngữ': ['Ngoại ngữ'],
+  };
+
+  return aliasMap[normalized] || [category];
+};
+
 // 1. LẤY DANH SÁCH SÁCH (Public - Ai cũng xem được để tra cứu)
 router.get('/', async (req, res) => {
   try {
@@ -21,7 +41,15 @@ router.get('/', async (req, res) => {
 
     // Lọc theo thể loại
     if (category && category !== 'Tất cả') {
-      whereClause.category = String(category);
+      const aliases = getCategoryAliases(String(category));
+      const categoryConditions = aliases.map((item) => ({
+        category: { equals: item, mode: 'insensitive' as const },
+      }));
+
+      whereClause.AND = [
+        ...(whereClause.AND || []),
+        { OR: categoryConditions },
+      ];
     }
 
     // Lọc sách còn sẵn
@@ -31,6 +59,19 @@ router.get('/', async (req, res) => {
 
     const books = await prisma.book.findMany({
       where: whereClause,
+      select: {
+        id: true,
+        bookCode: true,
+        title: true,
+        author: true,
+        category: true,
+        publisher: true,
+        publishYear: true,
+        totalQty: true,
+        availableQty: true,
+        imageUrl: true,
+        description: true,
+      },
       orderBy: { id: 'desc' }
     });
     
@@ -38,6 +79,65 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Lỗi server khi tải danh sách sách' });
+  }
+});
+
+// 1b. LẤY 4 SÁCH NỔI BẬT (Top sách được mượn nhiều nhất)
+router.get('/featured', async (_req, res) => {
+  try {
+    const topBorrowed = await prisma.$queryRaw<Array<{ bookId: number; borrowCount: number }>>`
+      SELECT "bookId", COUNT(*)::int AS "borrowCount"
+      FROM "Borrow"
+      GROUP BY "bookId"
+      ORDER BY COUNT(*) DESC
+      LIMIT 4
+    `;
+
+    const topBookIds = topBorrowed.map((item) => item.bookId);
+    const borrowCountMap = new Map<number, number>(topBorrowed.map((item) => [item.bookId, item.borrowCount]));
+
+    if (topBookIds.length === 0) {
+      const fallbackBooks = await prisma.book.findMany({
+        select: {
+          id: true,
+          title: true,
+          author: true,
+          availableQty: true,
+          imageUrl: true,
+        },
+        orderBy: { id: 'desc' },
+        take: 4,
+      });
+
+      res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=300');
+      return res.json(fallbackBooks.map((book) => ({ ...book, borrowCount: 0 })));
+    }
+
+    const books = await prisma.book.findMany({
+      where: { id: { in: topBookIds } },
+      select: {
+        id: true,
+        title: true,
+        author: true,
+        availableQty: true,
+        imageUrl: true,
+      },
+    });
+
+    const booksById = new Map(books.map((book) => [book.id, book]));
+    const featuredBooks = topBookIds
+      .map((id) => booksById.get(id))
+      .filter((book): book is NonNullable<typeof book> => Boolean(book))
+      .map((book) => ({
+        ...book,
+        borrowCount: borrowCountMap.get(book.id) || 0,
+      }));
+
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=300');
+    res.json(featuredBooks);
+  } catch (error) {
+    console.error('Loi tai featured books:', error);
+    res.status(500).json({ error: 'Lỗi server khi tải sách nổi bật' });
   }
 });
 

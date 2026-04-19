@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { useParams, Link } from 'react-router';
+import { useEffect, useState } from 'react';
+import { useParams, Link, useNavigate } from 'react-router';
 import { ChevronRight, Pencil, Trash2, AlertTriangle, Plus, Minus, BookOpen, Users, Package, X } from 'lucide-react';
 import AdminLayout from './AdminLayout';
+import { apiFetch } from '../lib/auth';
 
 interface BorrowHistory {
   id: string;
@@ -13,101 +14,192 @@ interface BorrowHistory {
   status: 'borrowed' | 'overdue' | 'returned';
 }
 
-const mockBook = {
-  id: '1',
-  code: 'BK001',
-  name: 'Lập trình Java cơ bản',
-  author: 'Nguyễn Văn A',
-  category: 'Công nghệ thông tin',
-  publisher: 'NXB Giáo dục',
-  year: 2023,
-  description: 'Cuốn sách cung cấp kiến thức nền tảng về lập trình Java, bao gồm cú pháp cơ bản, lập trình hướng đối tượng, xử lý ngoại lệ, và các khái niệm quan trọng khác. Phù hợp cho sinh viên mới bắt đầu học lập trình.',
-  totalQuantity: 50,
-  borrowedQuantity: 15,
-  availableQuantity: 35,
-};
+interface BookDetailRecord {
+  id: number;
+  bookCode: string;
+  title: string;
+  author: string;
+  category: string;
+  publisher: string;
+  publishYear: number;
+  imageUrl?: string | null;
+  description?: string | null;
+  totalQty: number;
+  availableQty: number;
+  borrows?: any[];
+}
 
-const mockBorrowHistory: BorrowHistory[] = [
-  {
-    id: '1',
-    studentName: 'Trần Văn B',
-    studentId: 'SV001',
-    borrowDate: '01/04/2026',
-    dueDate: '15/04/2026',
-    returnDate: null,
-    status: 'borrowed',
-  },
-  {
-    id: '2',
-    studentName: 'Lê Thị C',
-    studentId: 'SV002',
-    borrowDate: '28/03/2026',
-    dueDate: '05/04/2026',
-    returnDate: null,
-    status: 'overdue',
-  },
-  {
-    id: '3',
-    studentName: 'Phạm Văn D',
-    studentId: 'SV003',
-    borrowDate: '25/03/2026',
-    dueDate: '08/04/2026',
-    returnDate: '06/04/2026',
-    status: 'returned',
-  },
-  {
-    id: '4',
-    studentName: 'Hoàng Thị E',
-    studentId: 'SV004',
-    borrowDate: '20/03/2026',
-    dueDate: '03/04/2026',
-    returnDate: '02/04/2026',
-    status: 'returned',
-  },
-];
+const toDateText = (value: any) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleDateString('vi-VN');
+};
 
 export default function BookDetailPage() {
   const { id } = useParams();
-  const [book, setBook] = useState(mockBook);
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [book, setBook] = useState<BookDetailRecord | null>(null);
+  const [borrowHistory, setBorrowHistory] = useState<BorrowHistory[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [formData, setFormData] = useState({
-    code: mockBook.code,
-    name: mockBook.name,
-    author: mockBook.author,
-    category: mockBook.category,
-    publisher: mockBook.publisher,
-    year: mockBook.year,
-    description: mockBook.description,
+    code: '',
+    name: '',
+    author: '',
+    category: 'Công nghệ thông tin',
+    publisher: '',
+    year: new Date().getFullYear(),
+    description: '',
+    totalQty: 1,
   });
 
-  const handleQuantityChange = (field: 'totalQuantity', delta: number) => {
-    setBook((prev) => ({
-      ...prev,
-      [field]: Math.max(0, prev[field] + delta),
-    }));
+  const loadBook = async () => {
+    if (!id) return;
+
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/api/books/${id}`);
+      if (res?.error || !res) {
+        setBook(null);
+        setBorrowHistory([]);
+        return;
+      }
+
+      const raw = res as BookDetailRecord;
+      setBook(raw);
+      setFormData({
+        code: raw.bookCode || '',
+        name: raw.title || '',
+        author: raw.author || '',
+        category: raw.category || 'Công nghệ thông tin',
+        publisher: raw.publisher || '',
+        year: Number(raw.publishYear) || new Date().getFullYear(),
+        description: raw.description || '',
+        totalQty: Number(raw.totalQty) || 1,
+      });
+
+      const today = new Date();
+      const borrows = Array.isArray(raw.borrows) ? raw.borrows : [];
+      const mappedHistory: BorrowHistory[] = borrows.map((item: any) => {
+        const dueDate = new Date(item.dueDate);
+        const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        const dueStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+        const normalizedStatus = String(item.status || '').toUpperCase();
+
+        const status: BorrowHistory['status'] =
+          item.returnDate || normalizedStatus === 'RETURNED'
+            ? 'returned'
+            : !Number.isNaN(dueDate.getTime()) && dueStart.getTime() < todayStart.getTime()
+              ? 'overdue'
+              : 'borrowed';
+
+        return {
+          id: String(item.id),
+          studentName: item.user?.student?.fullName || item.user?.staff?.fullName || 'N/A',
+          studentId: item.user?.student?.studentCode || item.user?.staff?.staffCode || 'N/A',
+          borrowDate: toDateText(item.borrowDate),
+          dueDate: toDateText(item.dueDate),
+          returnDate: item.returnDate ? toDateText(item.returnDate) : null,
+          status,
+        };
+      });
+
+      setBorrowHistory(mappedHistory);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleEditBook = (e: React.FormEvent) => {
+  useEffect(() => {
+    void loadBook();
+  }, [id]);
+
+  const handleQuantityChange = async (delta: number) => {
+    if (!book) return;
+
+    const nextTotal = Math.max(1, Number(book.totalQty || 1) + delta);
+    if (nextTotal === book.totalQty) return;
+
+    const res = await apiFetch(`/api/books/${book.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        bookCode: book.bookCode,
+        title: book.title,
+        author: book.author,
+        category: book.category,
+        publisher: book.publisher,
+        publishYear: book.publishYear,
+        totalQty: nextTotal,
+        imageUrl: book.imageUrl || '',
+      }),
+    });
+
+    if (res?.error) {
+      alert(res.error || 'Không thể cập nhật số lượng');
+      return;
+    }
+
+    await loadBook();
+  };
+
+  const handleEditBook = async (e: React.FormEvent) => {
     e.preventDefault();
-    setBook((prev) => ({
-      ...prev,
-      ...formData,
-    }));
+    if (!book) return;
+
+    const res = await apiFetch(`/api/books/${book.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        bookCode: formData.code.trim(),
+        title: formData.name.trim(),
+        author: formData.author.trim(),
+        category: formData.category,
+        publisher: formData.publisher.trim(),
+        publishYear: Number(formData.year),
+        totalQty: Number(formData.totalQty),
+        imageUrl: book.imageUrl || '',
+      }),
+    });
+
+    if (res?.error) {
+      alert(res.error || 'Cập nhật sách thất bại');
+      return;
+    }
+
     setIsEditModalOpen(false);
+    await loadBook();
   };
 
   const openEditModal = () => {
+    if (!book) return;
+
     setFormData({
-      code: book.code,
-      name: book.name,
+      code: book.bookCode,
+      name: book.title,
       author: book.author,
       category: book.category,
       publisher: book.publisher,
-      year: book.year,
-      description: book.description,
+      year: Number(book.publishYear),
+      description: book.description || '',
+      totalQty: Number(book.totalQty) || 1,
     });
     setIsEditModalOpen(true);
+  };
+
+  const handleDeleteBook = async () => {
+    if (!book) return;
+
+    const res = await apiFetch(`/api/books/${book.id}`, {
+      method: 'DELETE',
+    });
+
+    if (res?.error) {
+      alert(res.error || 'Xóa sách thất bại');
+      return;
+    }
+
+    setIsDeleteModalOpen(false);
+    navigate('/admin/books');
   };
 
   const getStatusColor = (status: string) => {
@@ -136,10 +228,32 @@ export default function BookDetailPage() {
     }
   };
 
+  if (loading) {
+    return (
+      <AdminLayout pageTitle="Chi tiết sách">
+        <div className="text-gray-500">Đang tải dữ liệu...</div>
+      </AdminLayout>
+    );
+  }
+
+  if (!book) {
+    return (
+      <AdminLayout pageTitle="Chi tiết sách">
+        <div className="space-y-4">
+          <p className="text-gray-600">Không tìm thấy sách.</p>
+          <Link to="/admin/books" className="text-[#f79421] hover:underline">
+            Quay lại danh sách sách
+          </Link>
+        </div>
+      </AdminLayout>
+    );
+  }
+
+  const borrowedQuantity = Math.max(0, Number(book.totalQty) - Number(book.availableQty));
+
   return (
     <AdminLayout pageTitle="Chi tiết sách">
       <div className="space-y-6">
-        {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm text-gray-600">
           <Link to="/admin/books" className="hover:text-[#f79421] transition-colors">
             Sách
@@ -148,21 +262,22 @@ export default function BookDetailPage() {
           <span className="text-[#262262]">Chi tiết</span>
         </div>
 
-        {/* Top Section */}
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <div className="grid grid-cols-1 lg:grid-cols-[200px_1fr] gap-6">
-            {/* Book Cover */}
             <div className="flex justify-center lg:justify-start">
-              <div className="w-40 h-56 bg-gradient-to-br from-[#f79421]/20 to-[#262262]/20 rounded-lg flex items-center justify-center border border-gray-200">
-                <BookOpen className="w-16 h-16 text-gray-400" />
+              <div className="w-40 h-56 bg-gradient-to-br from-[#f79421]/20 to-[#262262]/20 rounded-lg flex items-center justify-center border border-gray-200 overflow-hidden">
+                {book.imageUrl ? (
+                  <img src={book.imageUrl} alt={book.title} className="w-full h-full object-cover" />
+                ) : (
+                  <BookOpen className="w-16 h-16 text-gray-400" />
+                )}
               </div>
             </div>
 
-            {/* Book Info */}
             <div className="space-y-4">
               <div className="flex items-start justify-between">
                 <div className="flex-1">
-                  <h2 className="text-[#262262] mb-2">{book.name}</h2>
+                  <h2 className="text-[#262262] mb-2">{book.title}</h2>
                   <p className="text-gray-600 mb-3">Tác giả: {book.author}</p>
                   <div className="flex flex-wrap gap-2 mb-3">
                     <span className="px-3 py-1 bg-[#f79421]/10 text-[#f79421] rounded-full text-sm">
@@ -174,10 +289,10 @@ export default function BookDetailPage() {
                       <span className="text-gray-500">Nhà xuất bản:</span> {book.publisher}
                     </p>
                     <p className="text-gray-600">
-                      <span className="text-gray-500">Năm xuất bản:</span> {book.year}
+                      <span className="text-gray-500">Năm xuất bản:</span> {book.publishYear}
                     </p>
                     <p className="text-gray-600">
-                      <span className="text-gray-500">Mã sách:</span> {book.code}
+                      <span className="text-gray-500">Mã sách:</span> {book.bookCode}
                     </p>
                   </div>
                 </div>
@@ -200,13 +315,12 @@ export default function BookDetailPage() {
               </div>
               <div className="pt-4 border-t border-gray-200">
                 <h3 className="text-[#262262] text-sm mb-2">Mô tả</h3>
-                <p className="text-gray-600 text-sm leading-relaxed">{book.description}</p>
+                <p className="text-gray-600 text-sm leading-relaxed">{book.description || 'Chưa có mô tả'}</p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Metric Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-white rounded-lg border border-gray-200 p-6 hover:border-[#f79421]/30 transition-colors">
             <div className="flex items-start justify-between mb-4">
@@ -215,13 +329,13 @@ export default function BookDetailPage() {
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => handleQuantityChange('totalQuantity', -1)}
+                  onClick={() => handleQuantityChange(-1)}
                   className="p-1 hover:bg-gray-100 rounded transition-colors"
                 >
                   <Minus className="w-4 h-4 text-gray-600" />
                 </button>
                 <button
-                  onClick={() => handleQuantityChange('totalQuantity', 1)}
+                  onClick={() => handleQuantityChange(1)}
                   className="p-1 hover:bg-gray-100 rounded transition-colors"
                 >
                   <Plus className="w-4 h-4 text-gray-600" />
@@ -229,7 +343,7 @@ export default function BookDetailPage() {
               </div>
             </div>
             <p className="text-gray-600 text-sm mb-1">Tổng số lượng</p>
-            <p className="text-[#262262]">{book.totalQuantity}</p>
+            <p className="text-[#262262]">{book.totalQty}</p>
           </div>
 
           <div className="bg-white rounded-lg border border-gray-200 p-6">
@@ -239,7 +353,7 @@ export default function BookDetailPage() {
               </div>
             </div>
             <p className="text-gray-600 text-sm mb-1">Đang mượn</p>
-            <p className="text-[#262262]">{book.borrowedQuantity}</p>
+            <p className="text-[#262262]">{borrowedQuantity}</p>
           </div>
 
           <div className="bg-white rounded-lg border border-gray-200 p-6">
@@ -249,11 +363,10 @@ export default function BookDetailPage() {
               </div>
             </div>
             <p className="text-gray-600 text-sm mb-1">Có sẵn</p>
-            <p className="text-[#262262]">{book.availableQuantity}</p>
+            <p className="text-[#262262]">{book.availableQty}</p>
           </div>
         </div>
 
-        {/* Borrow History Table */}
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200">
             <h3 className="text-[#262262]">Lịch sử mượn</h3>
@@ -271,33 +384,34 @@ export default function BookDetailPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {mockBorrowHistory.map((item) => (
-                  <tr key={item.id} className="hover:bg-[#f79421]/5 transition-colors">
-                    <td className="px-6 py-4 text-[#262262]">{item.studentName}</td>
-                    <td className="px-6 py-4 text-gray-600">{item.studentId}</td>
-                    <td className="px-6 py-4 text-gray-600">{item.borrowDate}</td>
-                    <td className="px-6 py-4 text-gray-600">{item.dueDate}</td>
-                    <td className="px-6 py-4 text-gray-600">
-                      {item.returnDate || '-'}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs ${getStatusColor(
-                          item.status
-                        )}`}
-                      >
-                        {getStatusLabel(item.status)}
-                      </span>
+                {borrowHistory.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
+                      Chưa có lượt mượn nào
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  borrowHistory.map((item) => (
+                    <tr key={item.id} className="hover:bg-[#f79421]/5 transition-colors">
+                      <td className="px-6 py-4 text-[#262262]">{item.studentName}</td>
+                      <td className="px-6 py-4 text-gray-600">{item.studentId}</td>
+                      <td className="px-6 py-4 text-gray-600">{item.borrowDate}</td>
+                      <td className="px-6 py-4 text-gray-600">{item.dueDate}</td>
+                      <td className="px-6 py-4 text-gray-600">{item.returnDate || '-'}</td>
+                      <td className="px-6 py-4">
+                        <span className={`px-3 py-1 rounded-full text-xs ${getStatusColor(item.status)}`}>
+                          {getStatusLabel(item.status)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
       </div>
 
-      {/* Edit Book Modal */}
       {isEditModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
@@ -358,9 +472,11 @@ export default function BookDetailPage() {
                 >
                   <option value="Công nghệ thông tin">Công nghệ thông tin</option>
                   <option value="Kinh tế">Kinh tế</option>
-                  <option value="Văn học">Văn học</option>
-                  <option value="Khoa học">Khoa học</option>
+                  <option value="Văn Học">Văn Học</option>
+                  <option value="Khoa học tự nhiên">Khoa học tự nhiên</option>
+                  <option value="Kỹ Thuật">Kỹ Thuật</option>
                   <option value="Lịch sử">Lịch sử</option>
+                  <option value="Ngoại ngữ">Ngoại ngữ</option>
                 </select>
               </div>
               <div>
@@ -377,7 +493,17 @@ export default function BookDetailPage() {
                 <input
                   type="number"
                   value={formData.year}
-                  onChange={(e) => setFormData({ ...formData, year: parseInt(e.target.value) })}
+                  onChange={(e) => setFormData({ ...formData, year: Number(e.target.value) })}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block mb-2 text-gray-700">Tổng số lượng</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={formData.totalQty}
+                  onChange={(e) => setFormData({ ...formData, totalQty: Number(e.target.value) || 1 })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent"
                 />
               </div>
@@ -410,7 +536,6 @@ export default function BookDetailPage() {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
       {isDeleteModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg max-w-md w-full p-6">
@@ -421,7 +546,7 @@ export default function BookDetailPage() {
             </div>
             <h2 className="text-[#262262] text-center mb-2">Xác nhận xóa sách</h2>
             <p className="text-gray-600 text-center mb-6">
-              Bạn có chắc chắn muốn xóa sách "{book.name}"? Hành động này không thể hoàn tác.
+              Bạn có chắc chắn muốn xóa sách "{book.title}"? Hành động này không thể hoàn tác.
             </p>
             <div className="flex gap-3">
               <button
@@ -431,10 +556,7 @@ export default function BookDetailPage() {
                 Hủy
               </button>
               <button
-                onClick={() => {
-                  setIsDeleteModalOpen(false);
-                  window.location.href = '/admin/books';
-                }}
+                onClick={handleDeleteBook}
                 className="flex-1 px-6 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors"
               >
                 Xóa

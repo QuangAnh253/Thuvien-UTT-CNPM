@@ -19,6 +19,10 @@ interface OverdueRecord {
   id: string;
   borrowCode: string;
   readerName: string;
+  studentId: string;
+  borrowDate: string;
+  dueDate: string;
+  books: string[];
   bookCount: number;
   overdueDays: number;
   fine: number;
@@ -26,7 +30,7 @@ interface OverdueRecord {
 
 export default function ReturnPage() {
   const [searchQuery, setSearchQuery] = useState('');
-  const [foundBorrows, setFoundBorrows] = useState<any[]>([]);
+  const [foundBorrows, setFoundBorrows] = useState<BorrowRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchPerformed, setSearchPerformed] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<BorrowRecord | null>(null);
@@ -66,20 +70,25 @@ export default function ReturnPage() {
 
   const fetchBorrows = async (query: string = '') => {
     setLoading(true);
-    const res = await apiFetch(`/api/return/search?q=${encodeURIComponent(query)}`);
     const hasQuery = query.trim().length > 0;
     setSearchPerformed(hasQuery);
 
+    const res = hasQuery
+      ? await apiFetch(`/api/return/search?q=${encodeURIComponent(query)}`)
+      : await apiFetch('/api/borrow?status=BORROWING&limit=200');
+
     if (res && !res.error && Array.isArray(res)) {
       const mapped = res.map(mapBorrowToRecord);
-      const latest = query ? mapped : mapped.slice(0, 10);
-
-      setFoundBorrows(latest);
+      setFoundBorrows(mapped);
       setOverdueRecords(
-        latest.map((item) => ({
+        mapped.map((item) => ({
           id: item.id,
           borrowCode: item.borrowCode,
           readerName: item.readerName,
+          studentId: item.studentId,
+          borrowDate: item.borrowDate,
+          dueDate: item.dueDate,
+          books: item.books,
           bookCount: item.books.length,
           overdueDays: item.overdueDays,
           fine: item.fine,
@@ -167,6 +176,9 @@ export default function ReturnPage() {
   const calculateFine = (overdueDays: number, ratePerDay: number = 5000) => {
     return Math.max(0, overdueDays) * ratePerDay;
   };
+
+  const activeBorrowRecords = overdueRecords.filter((record) => record.overdueDays === 0);
+  const overdueBorrowRecords = overdueRecords.filter((record) => record.overdueDays > 0);
 
   const getPhysicalConditionExtraFine = (condition: string) => {
     switch (condition) {
@@ -336,69 +348,127 @@ export default function ReturnPage() {
           </div>
         )}
 
-        {/* Overdue Table */}
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <div className="p-6 border-b border-gray-200">
-            <h3 className="text-lg text-[#262262]">Danh sách quá hạn</h3>
-            <p className="text-sm text-gray-500 mt-1">Sắp xếp theo số ngày quá hạn</p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-6 py-3 text-left text-gray-600 text-sm">Mã phiếu</th>
-                  <th className="px-6 py-3 text-left text-gray-600 text-sm">Tên sinh viên</th>
-                  <th className="px-6 py-3 text-left text-gray-600 text-sm">Số sách</th>
-                  <th className="px-6 py-3 text-left text-gray-600 text-sm">Số ngày quá hạn</th>
-                  <th className="px-6 py-3 text-left text-gray-600 text-sm">Tiền phạt (VND)</th>
-                  <th className="px-6 py-3 text-left text-gray-600 text-sm">Hành động</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {overdueRecords.length === 0 ? (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <div className="p-6 border-b border-gray-200 bg-green-50">
+              <h3 className="text-lg text-[#262262]">Đang mượn, chưa đến hạn</h3>
+              <p className="text-sm text-gray-500 mt-1">Các phiếu còn hạn trả</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
-                      {searchPerformed ? 'Không tìm thấy phiếu mượn phù hợp' : 'Không có phiếu mượn nào'}
-                    </td>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Mã phiếu</th>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Tên sinh viên</th>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Số sách</th>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Hạn trả</th>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Hành động</th>
                   </tr>
-                ) : (
-                  overdueRecords.map((record) => (
-                    <tr
-                      key={record.id}
-                      onClick={() => handleSelectRecord(String(record.id))}
-                      className={`transition-colors cursor-pointer ${
-                        record.overdueDays > 0
-                          ? 'bg-red-50 hover:bg-[#f79421]/10'
-                          : 'hover:bg-gray-50'
-                      }`}
-                    >
-                      <td className="px-6 py-4 text-[#262262] font-medium">{record.borrowCode}</td>
-                      <td className="px-6 py-4 text-[#262262]">{record.readerName}</td>
-                      <td className="px-6 py-4 text-gray-600">{record.bookCount}</td>
-                      <td className="px-6 py-4">
-                        <span className={record.overdueDays > 0 ? 'text-red-500 font-semibold' : 'text-gray-600'}>
-                          {record.overdueDays} ngày
-                        </span>
-                      </td>
-                      <td className={record.overdueDays > 0 ? 'px-6 py-4 text-red-500 font-semibold' : 'px-6 py-4 text-gray-600'}>
-                        {formatCurrency(record.fine)}
-                      </td>
-                      <td className="px-6 py-4">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleSelectRecord(String(record.id));
-                          }}
-                          className="px-4 py-2 bg-[#f79421] hover:bg-[#e68414] text-white rounded-lg transition-colors text-sm"
-                        >
-                          Xử lý trả
-                        </button>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                        Đang tải dữ liệu...
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : activeBorrowRecords.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                        {searchPerformed ? 'Không tìm thấy phiếu mượn phù hợp' : 'Không có phiếu mượn chưa đến hạn'}
+                      </td>
+                    </tr>
+                  ) : (
+                    activeBorrowRecords.map((record) => (
+                      <tr
+                        key={record.id}
+                        onClick={() => handleSelectRecord(String(record.id))}
+                        className="transition-colors cursor-pointer hover:bg-green-50"
+                      >
+                        <td className="px-6 py-4 text-[#262262] font-medium">{record.borrowCode}</td>
+                        <td className="px-6 py-4 text-[#262262]">{record.readerName}</td>
+                        <td className="px-6 py-4 text-gray-600">{record.bookCount}</td>
+                        <td className="px-6 py-4 text-gray-600">{formatDate(record.dueDate)}</td>
+                        <td className="px-6 py-4">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSelectRecord(String(record.id));
+                            }}
+                            className="px-4 py-2 bg-[#f79421] hover:bg-[#e68414] text-white rounded-lg transition-colors text-sm"
+                          >
+                            Xử lý trả
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <div className="p-6 border-b border-gray-200 bg-red-50">
+              <h3 className="text-lg text-[#262262]">Quá hạn</h3>
+              <p className="text-sm text-gray-500 mt-1">Các phiếu cần xử lý ưu tiên</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Mã phiếu</th>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Tên sinh viên</th>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Số sách</th>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Số ngày quá hạn</th>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Tiền phạt (VND)</th>
+                    <th className="px-6 py-3 text-left text-gray-600 text-sm">Hành động</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
+                        Đang tải dữ liệu...
+                      </td>
+                    </tr>
+                  ) : overdueBorrowRecords.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
+                        {searchPerformed ? 'Không tìm thấy phiếu mượn phù hợp' : 'Không có phiếu mượn quá hạn'}
+                      </td>
+                    </tr>
+                  ) : (
+                    overdueBorrowRecords.map((record) => (
+                      <tr
+                        key={record.id}
+                        onClick={() => handleSelectRecord(String(record.id))}
+                        className="transition-colors cursor-pointer bg-red-50 hover:bg-red-100"
+                      >
+                        <td className="px-6 py-4 text-[#262262] font-medium">{record.borrowCode}</td>
+                        <td className="px-6 py-4 text-[#262262]">{record.readerName}</td>
+                        <td className="px-6 py-4 text-gray-600">{record.bookCount}</td>
+                        <td className="px-6 py-4">
+                          <span className="text-red-500 font-semibold">{record.overdueDays} ngày</span>
+                        </td>
+                        <td className="px-6 py-4 text-red-500 font-semibold">{formatCurrency(record.fine)}</td>
+                        <td className="px-6 py-4">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSelectRecord(String(record.id));
+                            }}
+                            className="px-4 py-2 bg-[#f79421] hover:bg-[#e68414] text-white rounded-lg transition-colors text-sm"
+                          >
+                            Xử lý trả
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>

@@ -63,6 +63,8 @@ export default function AdminDashboard() {
     return Number.isNaN(date.getTime()) ? 'N/A' : date.toLocaleDateString('vi-VN');
   };
 
+  const toStartOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
   useEffect(() => {
     Promise.all([
       apiFetch('/api/reports/stats'),
@@ -107,7 +109,10 @@ export default function AdminDashboard() {
             dueDate: formatDate(item.dueDate),
             overdueDays: Math.max(
               0,
-              Math.floor((Date.now() - new Date(item.dueDate).getTime()) / (1000 * 60 * 60 * 24))
+              Math.floor(
+                (toStartOfDay(new Date()).getTime() - toStartOfDay(new Date(item.dueDate)).getTime()) /
+                  (1000 * 60 * 60 * 24)
+              )
             ),
           }))
         );

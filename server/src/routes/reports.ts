@@ -4,27 +4,44 @@ import { authenticateToken } from '../middleware/auth';
 
 const router = express.Router();
 
-// Middleware: Chỉ Admin mới xem được báo cáo
-const checkAdmin = (req: any, res: any, next: any) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Không có quyền truy cập' });
+const toStartOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+// Middleware: Nhân sự thư viện (admin/librarian) được xem báo cáo
+const checkStaffRole = (req: any, res: any, next: any) => {
+  const role = String(req.user?.role || '').toLowerCase();
+  if (role === 'student') return res.status(403).json({ error: 'Không có quyền truy cập' });
   next();
 };
 
 // 1. THỐNG KÊ TỔNG QUAN (Stats)
-router.get('/stats', authenticateToken, checkAdmin, async (req, res) => {
+router.get('/stats', authenticateToken, checkStaffRole, async (req, res) => {
   try {
     const totalBooks = await prisma.book.aggregate({ _sum: { totalQty: true } });
     const borrowing = await prisma.borrow.count({ where: { status: 'BORROWING' } });
     const readers = await prisma.student.count();
+    const todayStart = toStartOfDay(new Date());
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const overdue = await prisma.borrow.count({ 
-      where: { status: 'BORROWING', dueDate: { lt: new Date() } } 
+      where: { status: 'BORROWING', dueDate: { lt: todayStart } } 
+    });
+    const fineCollected = await prisma.returnRecord.aggregate({
+      _sum: { fineAmount: true },
+      where: {
+        returnDate: {
+          gte: monthStart,
+          lt: nextMonthStart,
+        },
+      },
     });
 
     res.json({
       totalBooks: totalBooks._sum.totalQty || 0,
       borrowing,
       readers,
-      overdue
+      overdue,
+      fineCollected: fineCollected._sum.fineAmount || 0,
     });
   } catch (error) {
     res.status(500).json({ error: 'Lỗi tải thống kê' });
@@ -32,7 +49,7 @@ router.get('/stats', authenticateToken, checkAdmin, async (req, res) => {
 });
 
 // 2. MƯỢN THEO THÁNG (Borrow by month - cho biểu đồ)
-router.get('/borrow-by-month', authenticateToken, checkAdmin, async (req, res) => {
+router.get('/borrow-by-month', authenticateToken, checkStaffRole, async (req, res) => {
   try {
     const period = String(req.query.period || 'month');
     const now = new Date();
@@ -118,13 +135,13 @@ router.get('/borrow-by-month', authenticateToken, checkAdmin, async (req, res) =
 });
 
 // 3. TOP ĐỘC GIẢ (Top Readers)
-router.get('/top-readers', authenticateToken, checkAdmin, async (req, res) => {
+router.get('/top-readers', authenticateToken, checkStaffRole, async (req, res) => {
   try {
     const topUsers = await prisma.borrow.groupBy({
       by: ['userId'],
       _count: { userId: true },
       orderBy: { _count: { userId: 'desc' } },
-      take: 5
+      take: 10
     });
 
     const result = await Promise.all(topUsers.map(async (u) => {
@@ -143,13 +160,13 @@ router.get('/top-readers', authenticateToken, checkAdmin, async (req, res) => {
 });
 
 // 4. TOP SÁCH MƯỢN NHIỀU NHẤT (Top Books)
-router.get('/top-books', authenticateToken, checkAdmin, async (req, res) => {
+router.get('/top-books', authenticateToken, checkStaffRole, async (req, res) => {
   try {
     const topBooks = await prisma.borrow.groupBy({
       by: ['bookId'],
       _count: { bookId: true },
       orderBy: { _count: { bookId: 'desc' } },
-      take: 5
+      take: 10
     });
 
     const result = await Promise.all(topBooks.map(async (b) => {
@@ -169,8 +186,38 @@ router.get('/top-books', authenticateToken, checkAdmin, async (req, res) => {
   }
 });
 
+// 4b. PHÂN BỔ THEO THỂ LOẠI (toàn bộ phiếu mượn)
+router.get('/category-distribution', authenticateToken, checkStaffRole, async (req, res) => {
+  try {
+    const borrows = await prisma.borrow.findMany({
+      select: {
+        book: {
+          select: {
+            category: true,
+          },
+        },
+      },
+    });
+
+    const categoryMap = new Map<string, number>();
+
+    for (const borrow of borrows) {
+      const category = String(borrow.book?.category || 'Khác').trim() || 'Khác';
+      categoryMap.set(category, (categoryMap.get(category) || 0) + 1);
+    }
+
+    const result = Array.from(categoryMap.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Lỗi tải phân bổ thể loại' });
+  }
+});
+
 // 5. DỮ LIỆU ĐỂ XUẤT EXCEL/PDF (Lấy toàn bộ phiếu mượn)
-router.get('/export-data', authenticateToken, checkAdmin, async (req, res) => {
+router.get('/export-data', authenticateToken, checkStaffRole, async (req, res) => {
   try {
     const data = await prisma.borrow.findMany({
       include: { book: true, user: { include: { student: true } } },

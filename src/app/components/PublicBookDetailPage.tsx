@@ -3,6 +3,7 @@ import { BookOpen, LogIn, ChevronRight, Star, ArrowLeft } from 'lucide-react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import { apiFetch, clearAuth, getUser, isLoggedIn } from '../lib/auth';
 import NotificationDropdown, { Notification } from './NotificationDropdown';
+import { addReadNotificationId, getReadNotificationIds, saveReadNotificationIds } from '../lib/notificationReadState';
 
 interface Book {
   id: string;
@@ -20,6 +21,7 @@ interface Book {
 }
 
 export default function PublicBookDetailPage() {
+  const notificationScope = 'student-notifications';
   const navigate = useNavigate();
   const location = useLocation();
   const { id } = useParams();
@@ -125,6 +127,11 @@ export default function PublicBookDetailPage() {
       return;
     }
 
+    if (authState.user?.role !== 'student') {
+      alert('Chỉ tài khoản sinh viên mới được đăng ký mượn sách.');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const res = await apiFetch('/api/borrow/request', {
@@ -173,7 +180,7 @@ export default function PublicBookDetailPage() {
           apiFetch('/api/student/pending-requests'),
         ]);
 
-        const readIds = JSON.parse(localStorage.getItem('readStudentNotifs') || '[]');
+        const readIds = await getReadNotificationIds(notificationScope);
         const today = new Date();
         const generatedNotifs: Notification[] = [];
 
@@ -238,17 +245,14 @@ export default function PublicBookDetailPage() {
     void fetchStudentNotifications();
   }, [authState.loggedIn, authState.user?.role]);
 
-  const handleMarkAsRead = (id: string) => {
-    const readIds = JSON.parse(localStorage.getItem('readStudentNotifs') || '[]');
-    if (!readIds.includes(id)) {
-      localStorage.setItem('readStudentNotifs', JSON.stringify([...readIds, id]));
-    }
+  const handleMarkAsRead = async (id: string) => {
+    await addReadNotificationId(notificationScope, id);
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
   };
 
-  const handleMarkAllAsRead = () => {
+  const handleMarkAllAsRead = async () => {
     const allIds = notifications.map((n) => n.id);
-    localStorage.setItem('readStudentNotifs', JSON.stringify(allIds));
+    await saveReadNotificationIds(notificationScope, allIds);
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
   };
 
@@ -445,10 +449,12 @@ export default function PublicBookDetailPage() {
                 {book.availableQty > 0 ? (
                   <button
                     onClick={handleBorrowRequest}
-                    disabled={submitting || success}
+                    disabled={submitting || success || (authState.loggedIn && authState.user?.role !== 'student')}
                     className={`w-full py-3 rounded-lg text-white font-semibold transition-colors ${
                       success
                         ? 'bg-green-600 cursor-default'
+                        : authState.loggedIn && authState.user?.role !== 'student'
+                        ? 'bg-gray-400 cursor-not-allowed'
                         : authState.loggedIn
                         ? 'bg-[#f79421] hover:bg-[#e67d0f]'
                         : 'bg-[#262262] hover:bg-[#1a1745]'
@@ -458,6 +464,8 @@ export default function PublicBookDetailPage() {
                       ? 'Đã gửi yêu cầu'
                       : submitting
                       ? 'Đang xử lý...'
+                      : authState.loggedIn && authState.user?.role !== 'student'
+                      ? 'Chỉ sinh viên được mượn'
                       : authState.loggedIn
                       ? 'Đăng ký mượn ngay'
                       : 'Đăng nhập để mượn sách'}

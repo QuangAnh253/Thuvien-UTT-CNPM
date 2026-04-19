@@ -3,11 +3,34 @@ import { prisma } from '../lib/prisma';
 import { authenticateToken } from '../middleware/auth';
 
 const router = express.Router();
+const buildAvatarKey = (userId: number) => `avatar:${userId}`;
+
+const getAvatarUrl = async (userId: number) => {
+  const key = buildAvatarKey(userId);
+  const config = await prisma.config.findUnique({ where: { key } });
+  return config?.value || '';
+};
+
+const toStartOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
 
 // 1. TẠO PHIẾU MƯỢN MỚI (Admin/Librarian thực hiện tại quầy)
 router.post('/', authenticateToken, async (req: any, res: any) => {
   try {
     const { studentId, bookId, days } = req.body;
+
+    const borrowerId = Number(studentId);
+    if (Number.isNaN(borrowerId)) {
+      return res.status(400).json({ error: 'Độc giả không hợp lệ' });
+    }
+
+    const borrower = await prisma.user.findUnique({
+      where: { id: borrowerId },
+      include: { student: true },
+    });
+
+    if (!borrower || borrower.role !== 'student' || !borrower.student) {
+      return res.status(400).json({ error: 'Chỉ sinh viên mới được mượn sách' });
+    }
 
     // Kiểm tra sách còn sẵn không
     const book = await prisma.book.findUnique({ where: { id: bookId } });
@@ -17,7 +40,7 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
 
     // Kiểm tra sinh viên có đang mượn quá hạn hoặc quá số lượng không (FR-11)
     const activeBorrows = await prisma.borrow.count({
-      where: { userId: studentId, status: 'BORROWING' }
+      where: { userId: borrowerId, status: 'BORROWING' }
     });
     if (activeBorrows >= 5) {
       return res.status(400).json({ error: 'Sinh viên đã mượn tối đa 5 cuốn sách' });
@@ -30,7 +53,7 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
     const result = await prisma.$transaction([
       prisma.borrow.create({
         data: {
-          userId: studentId,
+          userId: borrowerId,
           bookId: bookId,
           dueDate: dueDate,
           status: 'BORROWING'
@@ -54,13 +77,19 @@ router.post('/request', authenticateToken, async (req: any, res: any) => {
     const { bookId } = req.body;
     const userId = req.user.id;
 
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ error: 'Chỉ sinh viên mới được tự mượn sách' });
+    }
+
+    const todayStart = toStartOfDay(new Date());
+
     // --- KIỂM TRA QUY ĐỊNH (FR-11 & FR-13) ---
     // 1. Kiểm tra nợ quá hạn (FR-13)
     const overdueBooks = await prisma.borrow.count({
       where: {
         userId: userId,
         status: 'BORROWING',
-        dueDate: { lt: new Date() }
+        dueDate: { lt: todayStart }
       }
     });
     if (overdueBooks > 0) {
@@ -173,11 +202,11 @@ router.put('/:id/extend', authenticateToken, async (req: any, res: any) => {
 // 5. LẤY DANH SÁCH PHIẾU QUÁ HẠN
 router.get('/overdue', authenticateToken, async (req: any, res: any) => {
   try {
-    const today = new Date();
+    const todayStart = toStartOfDay(new Date());
     const overdueBorrows = await prisma.borrow.findMany({
       where: {
         status: 'BORROWING',
-        dueDate: { lt: today }
+        dueDate: { lt: todayStart }
       },
       include: {
         book: true,
@@ -260,7 +289,14 @@ router.get('/:id', authenticateToken, async (req: any, res: any) => {
       return res.status(404).json({ error: 'Không tìm thấy phiếu mượn' });
     }
 
-    res.json(borrow);
+    const avatarUrl = await getAvatarUrl(borrow.userId);
+    res.json({
+      ...borrow,
+      user: {
+        ...(borrow.user || {}),
+        avatarUrl,
+      },
+    });
   } catch (error) {
     res.status(500).json({ error: 'Lỗi khi lấy chi tiết phiếu mượn' });
   }
