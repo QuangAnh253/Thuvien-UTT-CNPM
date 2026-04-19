@@ -9,6 +9,7 @@ interface Reader {
   userId: number;
   fullName: string;
   studentId: string;
+  readerType: 'student' | 'lecturer';
   currentlyBorrowing: number;
   hasOverdue: boolean;
 }
@@ -63,6 +64,27 @@ const isPendingLikeBorrow = (borrow: any) =>
   borrow.status !== 'REJECTED' &&
   (borrow.status === 'PENDING' || (borrow.status === 'BORROWING' && isSameDate(borrow.borrowDate, borrow.dueDate)));
 
+const parseDateInput = (value: string) => {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return null;
+
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const formatDateInputValue = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
 export default function BorrowPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'active' | 'pending'>('active');
@@ -74,6 +96,7 @@ export default function BorrowPage() {
   const [selectedBooks, setSelectedBooks] = useState<SelectedBook[]>([]);
   const [borrowDate, setBorrowDate] = useState(new Date().toISOString().split('T')[0]);
   const [dueDate, setDueDate] = useState('');
+  const [workingCalendar, setWorkingCalendar] = useState({ closeOnWeekends: true, holidays: [] as string[] });
   const [notes, setNotes] = useState('');
   const [readerSearch, setReaderSearch] = useState('');
   const [bookSearch, setBookSearch] = useState('');
@@ -91,6 +114,26 @@ export default function BorrowPage() {
 
   useEffect(() => {
     fetchBorrows();
+  }, []);
+
+  useEffect(() => {
+    const fetchWorkingCalendar = async () => {
+      const [calendarRes, holidaysRes] = await Promise.all([
+        apiFetch('/api/settings/working-calendar'),
+        apiFetch('/api/settings/holidays'),
+      ]);
+
+      const holidayDates = Array.isArray(holidaysRes)
+        ? holidaysRes.map((item: any) => String(item.date || '')).filter(Boolean)
+        : [];
+
+      setWorkingCalendar({
+        closeOnWeekends: calendarRes?.closeOnWeekends !== false,
+        holidays: holidayDates,
+      });
+    };
+
+    void fetchWorkingCalendar();
   }, []);
 
   useEffect(() => {
@@ -116,6 +159,7 @@ export default function BorrowPage() {
             userId: reader.userId,
             fullName: reader.fullName,
             studentId: reader.studentCode,
+            readerType: reader.readerType === 'lecturer' ? 'lecturer' : 'student',
             currentlyBorrowing,
             hasOverdue,
           };
@@ -214,6 +258,35 @@ export default function BorrowPage() {
     setShowReaderDropdown(false);
   };
 
+  useEffect(() => {
+    if (!selectedReader) {
+      setDueDate('');
+      return;
+    }
+
+    const borrowStart = parseDateInput(borrowDate);
+    if (!borrowStart) {
+      setDueDate('');
+      return;
+    }
+
+    const borrowDurationDays = selectedReader.readerType === 'lecturer' ? 60 : 14;
+    let target = addDays(borrowStart, borrowDurationDays);
+
+    const isNonWorkingDay = (date: Date) => {
+      const key = formatDateInputValue(date);
+      const day = date.getDay();
+      const isWeekend = workingCalendar.closeOnWeekends && (day === 0 || day === 6);
+      return isWeekend || workingCalendar.holidays.includes(key);
+    };
+
+    while (isNonWorkingDay(target)) {
+      target = addDays(target, 1);
+    }
+
+    setDueDate(formatDateInputValue(target));
+  }, [borrowDate, selectedReader, workingCalendar]);
+
   const handleAddBook = (book: Book) => {
     setSelectedBooks([...selectedBooks, { id: book.id, name: book.name }]);
     setBookSearch('');
@@ -225,15 +298,10 @@ export default function BorrowPage() {
   };
 
   const handleCreateBorrow = async () => {
-    if (!selectedReader || selectedBooks.length === 0 || !dueDate) {
+    if (!selectedReader || selectedBooks.length === 0 || !borrowDate || !dueDate) {
       alert('Vui lòng điền đầy đủ thông tin');
       return;
     }
-
-    const diffDays = Math.ceil(
-      (new Date(dueDate).getTime() - new Date(borrowDate).getTime()) / (1000 * 60 * 60 * 24)
-    );
-    const days = diffDays > 0 ? diffDays : 14;
 
     for (const book of selectedBooks) {
       const res = await apiFetch('/api/borrow', {
@@ -241,7 +309,7 @@ export default function BorrowPage() {
         body: JSON.stringify({
           studentId: selectedReader.userId,
           bookId: Number(book.id),
-          days,
+          borrowDate,
         }),
       });
 
@@ -375,8 +443,9 @@ export default function BorrowPage() {
                   <input
                     type="date"
                     value={borrowDate}
+                    disabled={!selectedReader}
                     onChange={(e) => setBorrowDate(e.target.value)}
-                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent"
+                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   />
                 </div>
               </div>
@@ -389,12 +458,19 @@ export default function BorrowPage() {
                   <input
                     type="date"
                     value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent"
+                    readOnly
+                    disabled
+                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg bg-gray-100 text-gray-700 cursor-not-allowed"
                   />
                 </div>
               </div>
             </div>
+
+            {selectedReader && (
+              <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                Đã chọn role: <span className="font-semibold">{selectedReader.readerType === 'lecturer' ? 'Giảng viên' : 'Sinh viên'}</span>. Hạn trả được tự tính theo ngày mượn và ngày nghỉ.
+              </div>
+            )}
 
             {/* Notes */}
             <div>
@@ -423,6 +499,9 @@ export default function BorrowPage() {
                   <div className="flex-1">
                     <p className="text-[#262262]">{selectedReader.fullName}</p>
                     <p className="text-sm text-gray-500">{selectedReader.studentId}</p>
+                    <p className="text-sm text-gray-500">
+                      Role: {selectedReader.readerType === 'lecturer' ? 'Giảng viên' : 'Sinh viên'}
+                    </p>
                     <p className="text-xs text-gray-500">
                       Đang mượn: {selectedReader.currentlyBorrowing} sách
                     </p>

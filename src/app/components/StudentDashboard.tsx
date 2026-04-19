@@ -69,6 +69,21 @@ export default function StudentDashboard() {
     return Math.floor((startOfDue.getTime() - startOfToday.getTime()) / (1000 * 60 * 60 * 24));
   };
 
+  const getRenewalBlockReason = (book: BorrowedBook) => {
+    const daysRemaining = calculateDaysRemaining(book.dueDateRaw || book.dueDate);
+    if (daysRemaining < 0) {
+      return 'Sách đã quá hạn nên không thể gia hạn.';
+    }
+
+    if (daysRemaining > 3) {
+      return 'Chỉ được gia hạn trong 3 ngày trước hạn trả đến hết ngày hạn trả.';
+    }
+
+    return '';
+  };
+
+  const canRenewBorrow = (book: BorrowedBook) => !getRenewalBlockReason(book);
+
   const formatDateYMD = (value: any) => {
     if (!value) return '';
 
@@ -279,11 +294,24 @@ export default function StudentDashboard() {
   };
 
   const handleRenewalRequest = (book: BorrowedBook) => {
+    const blockReason = getRenewalBlockReason(book);
+    if (blockReason) {
+      alert(blockReason);
+      return;
+    }
+
     setRenewalModal({ show: true, book });
   };
 
   const confirmRenewal = async () => {
     if (!renewalModal.book) return;
+
+    const blockReason = getRenewalBlockReason(renewalModal.book);
+    if (blockReason) {
+      alert(blockReason);
+      setRenewalModal({ show: false, book: null });
+      return;
+    }
 
     try {
       const res = await apiFetch(`/api/borrow/${renewalModal.book.id}/extend`, {
@@ -459,10 +487,12 @@ export default function StudentDashboard() {
                     {/* Renewal Button */}
                     <button
                       onClick={() => handleRenewalRequest(book)}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-[#f79421] text-white rounded-lg hover:bg-[#e67d0f] transition-colors text-sm font-semibold"
+                      disabled={!canRenewBorrow(book)}
+                      title={getRenewalBlockReason(book) || 'Gia hạn sách'}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-[#f79421] text-white rounded-lg hover:bg-[#e67d0f] transition-colors text-sm font-semibold disabled:bg-gray-300 disabled:text-gray-600 disabled:hover:bg-gray-300 disabled:cursor-not-allowed"
                     >
                       <RefreshCw className="w-4 h-4" />
-                      Gia hạn
+                      {canRenewBorrow(book) ? 'Gia hạn' : 'Chưa tới hạn'}
                     </button>
                   </div>
                 </div>
@@ -543,12 +573,12 @@ export default function StudentDashboard() {
                   <p>Ngày mượn: {renewalModal.book.borrowDate}</p>
                   <p>Hạn trả hiện tại: {renewalModal.book.dueDate}</p>
                   <p className="text-[#f79421] font-semibold mt-2">
-                    Hạn trả mới: {formatDateYMD(new Date((renewalModal.book.dueDateRaw || renewalModal.book.dueDate) as string).getTime() + 14 * 24 * 60 * 60 * 1000)}
+                    Hạn trả mới: sẽ được cộng thêm theo chính sách và tự dời qua ngày làm việc nếu rơi vào ngày nghỉ.
                   </p>
                 </div>
               </div>
               <p className="text-sm text-gray-500 mt-3">
-                * Sách sẽ được gia hạn thêm 14 ngày kể từ hạn trả hiện tại
+                * Sách sẽ được gia hạn theo số ngày quy định, sau đó tự dời qua Thứ 7, Chủ nhật và ngày lễ nếu rơi vào ngày nghỉ
               </p>
             </div>
 

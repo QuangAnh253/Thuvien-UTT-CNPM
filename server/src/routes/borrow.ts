@@ -219,18 +219,14 @@ const addCalendarHoursWithNonWorkingOffset = (fromDate: Date, hours: number, set
   return target;
 };
 
-const addWorkingDays = (fromDate: Date, workingDays: number, settings: WorkingCalendarSettings) => {
-  const target = new Date(fromDate);
-  let remaining = Math.max(0, Number(workingDays || 0));
+const addCalendarDaysWithNonWorkingOffset = (fromDate: Date, calendarDays: number, settings: WorkingCalendarSettings) => {
+  let target = addDays(fromDate, Math.max(0, Number(calendarDays || 0)));
 
-  while (remaining > 0) {
-    target.setDate(target.getDate() + 1);
-    if (!isNonWorkingDay(target, settings.holidayDateSet, settings.closeOnWeekends)) {
-      remaining -= 1;
-    }
+  while (isNonWorkingDay(target, settings.holidayDateSet, settings.closeOnWeekends)) {
+    target = addDays(target, 1);
   }
 
-  return target;
+  return clampToWorkingHours(target, settings);
 };
 
 const expireUserPendingRequestsIfNeeded = async (userId: number, policy: ReaderBorrowPolicy) => {
@@ -277,10 +273,32 @@ const getAvatarUrl = async (userId: number) => {
 
 const toStartOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
 
+const parseDateOnlyInput = (value: unknown) => {
+  const raw = String(value || '').trim();
+  const matched = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!matched) return null;
+
+  const year = Number(matched[1]);
+  const month = Number(matched[2]);
+  const day = Number(matched[3]);
+  const parsed = new Date(year, month - 1, day);
+
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) {
+    return null;
+  }
+
+  parsed.setHours(0, 0, 0, 0);
+  return parsed;
+};
+
 // 1. TẠO PHIẾU MƯỢN MỚI (Admin/Librarian thực hiện tại quầy)
 router.post('/', authenticateToken, async (req: any, res: any) => {
   try {
-    const { studentId, bookId } = req.body;
+    const { studentId, bookId, borrowDate } = req.body;
 
     const borrowerId = Number(studentId);
     if (Number.isNaN(borrowerId)) {
@@ -341,7 +359,12 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
       });
     }
 
-    const dueDate = addWorkingDays(new Date(), policy.borrowDurationDays, workingCalendar);
+    const borrowStartDate = parseDateOnlyInput(borrowDate);
+    if (!borrowStartDate) {
+      return res.status(400).json({ error: 'Ngày mượn không hợp lệ, dùng định dạng YYYY-MM-DD' });
+    }
+
+    const dueDate = addCalendarDaysWithNonWorkingOffset(borrowStartDate, policy.borrowDurationDays, workingCalendar);
 
     // Thực hiện Transaction: Tạo phiếu mượn + Trừ số lượng sách
     const result = await prisma.$transaction([
@@ -349,6 +372,7 @@ router.post('/', authenticateToken, async (req: any, res: any) => {
         data: {
           userId: borrowerId,
           bookId: bookId,
+          borrowDate: borrowStartDate,
           dueDate: dueDate,
           status: 'BORROWING',
           extensionCount: 0,
@@ -474,7 +498,7 @@ router.put('/:id/approve', authenticateToken, async (req: any, res: any) => {
       return res.status(400).json({ error: 'Yêu cầu mượn đã quá hạn nhận sách' });
     }
 
-    const dueDate = addWorkingDays(new Date(), policy.borrowDurationDays, workingCalendar);
+    const dueDate = addCalendarDaysWithNonWorkingOffset(new Date(), policy.borrowDurationDays, workingCalendar);
 
     const result = await prisma.$transaction([
       prisma.borrow.update({
@@ -552,7 +576,7 @@ router.put('/:id/extend', authenticateToken, async (req: any, res: any) => {
     }
 
     const newDueDate = new Date(borrow.dueDate);
-    const extendedDueDate = addWorkingDays(newDueDate, policy.renewalDurationDays, workingCalendar);
+    const extendedDueDate = addCalendarDaysWithNonWorkingOffset(newDueDate, policy.renewalDurationDays, workingCalendar);
 
     const updated = await prisma.borrow.update({
       where: { id: borrow.id },
