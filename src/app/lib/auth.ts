@@ -1,7 +1,15 @@
 // Helper quản lý auth token + user info
 
-// Base URL cho API - hỗ trợ production qua VITE_API_URL
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+// Base URL cho API.
+// - Ưu tiên VITE_API_URL (dùng khi FE/BE khác domain)
+// - Nếu chạy local mà không set env thì fallback localhost:3001
+// - Production không fallback localhost để tránh lỗi ERR_CONNECTION_REFUSED
+const envApiUrl = String(import.meta.env.VITE_API_URL || '').trim();
+const isBrowser = typeof window !== 'undefined';
+const isLocalBrowser =
+  isBrowser && /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
+const fallbackApiUrl = isLocalBrowser ? 'http://localhost:3001' : '';
+const BASE_URL = (envApiUrl || fallbackApiUrl).replace(/\/+$/, '');
 
 export const getToken = (): string | null =>
   localStorage.getItem('token')
@@ -26,7 +34,7 @@ export const isLoggedIn = (): boolean => !!getToken()
 // Helper to construct full API URL
 export const getApiUrl = (path: string): string => {
   if (path.startsWith('http')) return path;
-  return `${BASE_URL}${path}`;
+  return BASE_URL ? `${BASE_URL}${path}` : path;
 };
 
 // Wrapper fetch tự động thêm Bearer token

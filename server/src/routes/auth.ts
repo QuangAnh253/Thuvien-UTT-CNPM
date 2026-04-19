@@ -1,22 +1,85 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
 import { authenticateToken } from '../middleware/auth';
+import { sendRegisterOtpEmail } from '../lib/email';
 
 const router = express.Router();
+
+const buildPreferenceKey = (userId: number, scope: string) => `pref:${userId}:${scope}`;
+const REGISTER_OTP_EXPIRES_SECONDS = 300;
+const REGISTER_OTP_MAX_ATTEMPTS = 5;
+const buildRegisterOtpKey = (otpId: string) => `otp:register:${otpId}`;
+const USERNAME_REGEX = /^(?=.{6,20}$)(?!.*[._]{2})(?!.*[._]$)[a-z][a-z0-9._]*$/;
+const RESERVED_USERNAMES = new Set(['admin', 'root', 'system', 'support', 'null', 'undefined']);
+
+const normalizeEmail = (value: any) => String(value || '').trim().toLowerCase();
+const normalizeUsername = (value: any) => String(value || '').trim().toLowerCase();
+
+const isValidEmail = (email: string) => {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+};
+
+const validateUsername = (value: any): string | null => {
+  const username = normalizeUsername(value);
+  if (!username) return 'Vui lòng nhập tên đăng nhập';
+  if (!USERNAME_REGEX.test(username)) {
+    return 'Username phải từ 6-20 ký tự, bắt đầu bằng chữ thường, chỉ gồm a-z, 0-9, ., _';
+  }
+  if (RESERVED_USERNAMES.has(username)) {
+    return 'Username này không được phép sử dụng';
+  }
+  return null;
+};
+
+const generateOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
+
+const readPreferenceIds = async (userId: number, scope: string): Promise<string[]> => {
+  const key = buildPreferenceKey(userId, scope);
+  const pref = await prisma.config.findUnique({ where: { key } });
+  if (!pref?.value) return [];
+
+  try {
+    const parsed = JSON.parse(pref.value);
+    return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
+  } catch {
+    return [];
+  }
+};
+
+const writePreferenceIds = async (userId: number, scope: string, ids: string[]) => {
+  const uniqueIds = Array.from(new Set(ids.map((item) => String(item).trim()).filter(Boolean)));
+  const key = buildPreferenceKey(userId, scope);
+
+  await prisma.config.upsert({
+    where: { key },
+    create: { key, value: JSON.stringify(uniqueIds) },
+    update: { value: JSON.stringify(uniqueIds) },
+  });
+
+  return uniqueIds;
+};
 
 router.post('/login', async (req, res): Promise<any> => {
   try {
     const { username, password } = req.body;
+    const credential = String(username || '').trim();
 
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
+    if (!credential || !password) {
+      return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập/email và mật khẩu' });
     }
 
     // 1. Tìm user trong database
-    const user: any = await prisma.user.findUnique({
-      where: { username },
+    const user: any = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { username: credential },
+          { student: { email: { equals: credential, mode: 'insensitive' } } },
+          { staff: { email: { equals: credential, mode: 'insensitive' } } },
+        ],
+      },
       include: {
         staff: true,
         student: true,
@@ -24,13 +87,13 @@ router.post('/login', async (req, res): Promise<any> => {
     });
 
     if (!user) {
-      return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
+      return res.status(401).json({ error: 'Tên đăng nhập/email hoặc mật khẩu không chính xác' });
     }
 
     // 2. Kiểm tra mật khẩu
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
+      return res.status(401).json({ error: 'Tên đăng nhập/email hoặc mật khẩu không chính xác' });
     }
 
     // 2.5. Chặn sinh viên bị khóa đăng nhập
@@ -59,6 +122,7 @@ router.post('/login', async (req, res): Promise<any> => {
         username: user.username,
         role: user.role,
         fullName: fullName,
+        studentCode: user.student?.studentCode || '',
         status: user.status,
       }
     });
@@ -69,14 +133,181 @@ router.post('/login', async (req, res): Promise<any> => {
   }
 });
 
+// --- API KIỂM TRA USERNAME CÒN TRỐNG ---
+router.get('/register/check-username', async (req, res): Promise<any> => {
+  try {
+    const username = normalizeUsername(req.query.username);
+
+    const usernameError = validateUsername(username);
+    if (usernameError) {
+      return res.status(400).json({
+        available: false,
+        error: usernameError,
+      });
+    }
+
+    const existingUser = await prisma.user.findUnique({ where: { username } });
+    return res.json({ available: !existingUser });
+  } catch (error) {
+    console.error('Check username error:', error);
+    return res.status(500).json({ available: false, error: 'Lỗi server khi kiểm tra username' });
+  }
+});
+
+// --- API GỬI OTP CHO ĐĂNG KÝ ---
+router.post('/register/send-otp', async (req, res): Promise<any> => {
+  try {
+    const username = normalizeUsername(req.body?.username);
+    const studentCode = String(req.body?.studentCode || '').trim();
+    const email = normalizeEmail(req.body?.email);
+
+    const usernameError = validateUsername(username);
+    if (usernameError) {
+      return res.status(400).json({ error: usernameError });
+    }
+
+    if (!username || !studentCode || !email) {
+      return res.status(400).json({ error: 'Vui lòng nhập đủ tên đăng nhập, mã sinh viên và email' });
+    }
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Email không hợp lệ' });
+    }
+
+    const [existingUser, existingStudent] = await Promise.all([
+      prisma.user.findUnique({ where: { username } }),
+      prisma.student.findUnique({ where: { studentCode } }),
+    ]);
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'Tên đăng nhập đã tồn tại!' });
+    }
+
+    if (existingStudent) {
+      return res.status(400).json({ error: 'Mã sinh viên này đã được đăng ký!' });
+    }
+
+    const otpId = crypto.randomUUID();
+    const otpCode = generateOtpCode();
+    const expiresAt = Date.now() + REGISTER_OTP_EXPIRES_SECONDS * 1000;
+    const key = buildRegisterOtpKey(otpId);
+
+    await prisma.config.create({
+      data: {
+        key,
+        value: JSON.stringify({
+          code: otpCode,
+          email,
+          attempts: 0,
+          expiresAt,
+        }),
+      },
+    });
+
+    let emailSent = false;
+    try {
+      const mailResult = await sendRegisterOtpEmail({
+        to: email,
+        otpCode,
+        expiresInSeconds: REGISTER_OTP_EXPIRES_SECONDS,
+      });
+      emailSent = mailResult.sent;
+    } catch (mailError) {
+      console.error('Send OTP via Resend failed:', mailError);
+    }
+
+    if (!emailSent) {
+      console.log(`[REGISTER OTP][DEV FALLBACK] ${email}: ${otpCode}`);
+    }
+
+    return res.json({
+      message: emailSent
+        ? 'Đã gửi mã OTP, vui lòng kiểm tra email.'
+        : 'Đã tạo mã OTP. Môi trường hiện tại chưa gửi email thực tế.',
+      otpId,
+      expiresIn: REGISTER_OTP_EXPIRES_SECONDS,
+      ...(process.env.NODE_ENV === 'production' || emailSent ? {} : { devOtp: otpCode }),
+    });
+  } catch (error) {
+    console.error('Send register OTP error:', error);
+    return res.status(500).json({ error: 'Lỗi server khi gửi OTP' });
+  }
+});
+
 // --- API DANG KY (Danh cho Sinh vien) ---
 router.post('/register', async (req, res): Promise<any> => {
   try {
-    const { username, password, fullName, studentCode, email, phone } = req.body;
+    const username = normalizeUsername(req.body?.username);
+    const { password, fullName, studentCode, email, phone, otpId, otpCode } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+
+    const usernameError = validateUsername(username);
+    if (usernameError) {
+      return res.status(400).json({ error: usernameError });
+    }
 
     // 1. Kiem tra dau vao co ban
-    if (!username || !password || !fullName || !studentCode) {
+    if (!username || !password || !fullName || !studentCode || !normalizedEmail || !otpId || !otpCode) {
       return res.status(400).json({ error: 'Vui long nhap du cac truong bat buoc' });
+    }
+
+    if (!isValidEmail(normalizedEmail)) {
+      return res.status(400).json({ error: 'Email không hợp lệ' });
+    }
+
+    const otpKey = buildRegisterOtpKey(String(otpId));
+    const otpConfig = await prisma.config.findUnique({ where: { key: otpKey } });
+    if (!otpConfig?.value) {
+      return res.status(400).json({ error: 'OTP không hợp lệ hoặc đã hết hạn' });
+    }
+
+    let otpPayload: {
+      code: string;
+      email: string;
+      attempts: number;
+      expiresAt: number;
+    };
+
+    try {
+      otpPayload = JSON.parse(otpConfig.value);
+    } catch {
+      await prisma.config.deleteMany({ where: { key: otpKey } });
+      return res.status(400).json({ error: 'OTP không hợp lệ hoặc đã hết hạn' });
+    }
+
+    if (Date.now() > Number(otpPayload.expiresAt || 0)) {
+      await prisma.config.deleteMany({ where: { key: otpKey } });
+      return res.status(400).json({ error: 'Mã OTP đã hết hạn. Vui lòng gửi lại OTP mới.' });
+    }
+
+    if (normalizeEmail(otpPayload.email) !== normalizedEmail) {
+      return res.status(400).json({ error: 'OTP không khớp với email đăng ký' });
+    }
+
+    if (Number(otpPayload.attempts || 0) >= REGISTER_OTP_MAX_ATTEMPTS) {
+      await prisma.config.deleteMany({ where: { key: otpKey } });
+      return res.status(400).json({ error: 'Bạn đã nhập sai OTP quá số lần cho phép' });
+    }
+
+    if (String(otpCode).trim() !== String(otpPayload.code || '').trim()) {
+      const nextAttempts = Number(otpPayload.attempts || 0) + 1;
+
+      if (nextAttempts >= REGISTER_OTP_MAX_ATTEMPTS) {
+        await prisma.config.deleteMany({ where: { key: otpKey } });
+        return res.status(400).json({ error: 'OTP không đúng. Bạn đã hết lượt thử, vui lòng gửi lại OTP.' });
+      }
+
+      await prisma.config.update({
+        where: { key: otpKey },
+        data: {
+          value: JSON.stringify({
+            ...otpPayload,
+            attempts: nextAttempts,
+          }),
+        },
+      });
+
+      return res.status(400).json({ error: `OTP không đúng. Còn ${REGISTER_OTP_MAX_ATTEMPTS - nextAttempts} lượt thử.` });
     }
 
     // 2. Kiem tra xem username hoac ma SV da ton tai chua
@@ -103,7 +334,7 @@ router.post('/register', async (req, res): Promise<any> => {
           create: {
             studentCode,
             fullName,
-            email: email || '',
+            email: normalizedEmail,
             phone: phone || '',
             readerType: 'student',
             address: '', // Co the cho cap nhat sau o trang Profile
@@ -112,6 +343,8 @@ router.post('/register', async (req, res): Promise<any> => {
         },
       },
     });
+
+    await prisma.config.deleteMany({ where: { key: otpKey } });
 
     res.json({ message: 'Dang ky tai khoan thanh cong!' });
   } catch (error) {
@@ -154,6 +387,58 @@ router.put('/change-password', authenticateToken, async (req: any, res): Promise
   } catch (error) {
     console.error("Change password error:", error);
     res.status(500).json({ error: 'Lỗi server khi đổi mật khẩu' });
+  }
+});
+
+// --- API LƯU CÀI ĐẶT CÁ NHÂN (đọc/trạng thái thông báo) ---
+router.get('/preferences/:scope', authenticateToken, async (req: any, res): Promise<any> => {
+  try {
+    const userId = Number(req.user?.id);
+    const scope = String(req.params.scope || '').trim();
+
+    if (!userId || !scope) {
+      return res.status(400).json({ error: 'Thiếu user hoặc scope hợp lệ' });
+    }
+
+    const ids = await readPreferenceIds(userId, scope);
+    return res.json({ ids });
+  } catch (error) {
+    return res.status(500).json({ error: 'Lỗi server khi tải preferences' });
+  }
+});
+
+router.put('/preferences/:scope', authenticateToken, async (req: any, res): Promise<any> => {
+  try {
+    const userId = Number(req.user?.id);
+    const scope = String(req.params.scope || '').trim();
+    const incomingIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+
+    if (!userId || !scope) {
+      return res.status(400).json({ error: 'Thiếu user hoặc scope hợp lệ' });
+    }
+
+    const ids = await writePreferenceIds(userId, scope, incomingIds);
+    return res.json({ ids });
+  } catch (error) {
+    return res.status(500).json({ error: 'Lỗi server khi lưu preferences' });
+  }
+});
+
+router.patch('/preferences/:scope', authenticateToken, async (req: any, res): Promise<any> => {
+  try {
+    const userId = Number(req.user?.id);
+    const scope = String(req.params.scope || '').trim();
+    const id = String(req.body?.id || '').trim();
+
+    if (!userId || !scope || !id) {
+      return res.status(400).json({ error: 'Thiếu user/scope/id hợp lệ' });
+    }
+
+    const currentIds = await readPreferenceIds(userId, scope);
+    const ids = await writePreferenceIds(userId, scope, [...currentIds, id]);
+    return res.json({ ids });
+  } catch (error) {
+    return res.status(500).json({ error: 'Lỗi server khi cập nhật preferences' });
   }
 });
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
-import { getToken, getUser, setAuth } from '../lib/auth';
+import { getApiUrl, getToken, getUser, setAuth } from '../lib/auth';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -30,18 +30,29 @@ export default function LoginPage() {
     setError('');
 
     if (!username || !password) {
-      setError('Vui lòng nhập đầy đủ tên đăng nhập và mật khẩu');
+      setError('Vui lòng nhập đầy đủ tên đăng nhập hoặc email và mật khẩu');
       return;
     }
 
     try {
-      const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-      const res = await fetch(`${BASE_URL}/api/auth/login`, {
+      const res = await fetch(getApiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-      const data = await res.json();
+
+      const contentType = res.headers.get('content-type') || '';
+      const rawText = await res.text();
+      let data: any = {};
+      if (contentType.includes('application/json') && rawText) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = { error: 'Phản hồi từ máy chủ không hợp lệ' };
+        }
+      } else if (rawText) {
+        data = { error: rawText };
+      }
 
       if (res.status === 403 && data?.status === 'locked') {
         setShowLockedPopup(true);
@@ -49,7 +60,7 @@ export default function LoginPage() {
       }
 
       if (!res.ok || data.error) {
-        setError(data.error || 'Tên đăng nhập hoặc mật khẩu không chính xác');
+        setError(data.error || 'Tên đăng nhập hoặc email hoặc mật khẩu không chính xác');
         return;
       }
 
@@ -87,14 +98,14 @@ export default function LoginPage() {
           <form onSubmit={handleLogin}>
             <div className="mb-4">
               <label htmlFor="username" className="block mb-2 text-gray-700">
-                Tên đăng nhập
+                Tên đăng nhập hoặc email
               </label>
               <input
                 id="username"
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="Nhập tên đăng nhập"
+                placeholder="Nhập tên đăng nhập hoặc email"
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent"
               />
             </div>

@@ -1,8 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Eye, EyeOff, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
+import { getApiUrl } from '../lib/auth';
+import { InputOTP, InputOTPGroup, InputOTPSlot } from './ui/input-otp';
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2 | 3 | 4;
+type UsernameStatus = 'idle' | 'checking' | 'available' | 'taken' | 'error';
+const USERNAME_REGEX = /^(?=.{6,20}$)(?!.*[._]{2})(?!.*[._]$)[a-z][a-z0-9._]*$/;
+const RESERVED_USERNAMES = new Set(['admin', 'root', 'system', 'support', 'null', 'undefined']);
+
+const normalizeUsername = (value: string) => value.trim().toLowerCase();
+
+const validateUsername = (value: string): string | null => {
+  const username = normalizeUsername(value);
+  if (!username) return 'Vui lòng nhập tên đăng nhập';
+  if (!USERNAME_REGEX.test(username)) {
+    return 'Username phải từ 6-20 ký tự, bắt đầu bằng chữ thường, chỉ gồm a-z, 0-9, ., _';
+  }
+  if (RESERVED_USERNAMES.has(username)) {
+    return 'Username này không được phép sử dụng';
+  }
+  return null;
+};
 
 export default function RegisterPage() {
   const navigate = useNavigate();
@@ -10,6 +29,12 @@ export default function RegisterPage() {
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpId, setOtpId] = useState('');
+  const [resendIn, setResendIn] = useState(0);
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>('idle');
+  const [usernameHint, setUsernameHint] = useState('');
 
   const [formData, setFormData] = useState({
     username: '',
@@ -21,10 +46,18 @@ export default function RegisterPage() {
     phone: '',
     address: ''
   });
+  const usernameRuleError = validateUsername(formData.username);
+  const canSubmitStep1 = !usernameRuleError && usernameStatus === 'available';
 
   const handleStep1Submit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    const localUsernameError = validateUsername(formData.username);
+    if (localUsernameError) {
+      setError(localUsernameError);
+      return;
+    }
 
     if (!formData.username || !formData.password || !formData.confirmPassword) {
       setError('Vui lòng nhập đầy đủ thông tin');
@@ -41,7 +74,63 @@ export default function RegisterPage() {
       return;
     }
 
+    if (usernameStatus === 'checking') {
+      setError('Đang kiểm tra tên đăng nhập, vui lòng đợi...');
+      return;
+    }
+
+    if (usernameStatus === 'taken') {
+      setError('Tên đăng nhập đã tồn tại, vui lòng chọn tên khác');
+      return;
+    }
+
+    if (usernameStatus === 'error') {
+      setError('Không thể kiểm tra tên đăng nhập, vui lòng thử lại');
+      return;
+    }
+
+    if (usernameStatus !== 'available') {
+      setError('Vui lòng chờ kiểm tra username hoàn tất');
+      return;
+    }
+
     setCurrentStep(2);
+  };
+
+  const checkUsernameAvailability = async (usernameRaw: string) => {
+    const username = normalizeUsername(usernameRaw);
+    const localUsernameError = validateUsername(username);
+    if (localUsernameError) {
+      setUsernameStatus('idle');
+      setUsernameHint(localUsernameError);
+      return;
+    }
+
+    setUsernameStatus('checking');
+    setUsernameHint('Đang kiểm tra...');
+
+    try {
+      const query = new URLSearchParams({ username });
+      const res = await fetch(getApiUrl(`/api/auth/register/check-username?${query.toString()}`));
+      const data = await res.json();
+
+      if (!res.ok || data?.error) {
+        setUsernameStatus('error');
+        setUsernameHint(data?.error || 'Không thể kiểm tra username');
+        return;
+      }
+
+      if (data?.available) {
+        setUsernameStatus('available');
+        setUsernameHint('Tên đăng nhập có thể sử dụng');
+      } else {
+        setUsernameStatus('taken');
+        setUsernameHint('Tên đăng nhập đã tồn tại');
+      }
+    } catch {
+      setUsernameStatus('error');
+      setUsernameHint('Lỗi kết nối khi kiểm tra username');
+    }
   };
 
   const handleStep2Submit = async (e: React.FormEvent) => {
@@ -58,9 +147,74 @@ export default function RegisterPage() {
       return;
     }
 
+    if (!formData.email) {
+      setError('Vui lòng nhập email để nhận mã OTP');
+      return;
+    }
+
     try {
-      const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-      const res = await fetch(`${BASE_URL}/api/auth/register`, {
+      setSendingOtp(true);
+      const res = await fetch(getApiUrl('/api/auth/register/send-otp'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: formData.username,
+          studentCode: formData.studentCode,
+          email: formData.email,
+        }),
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      const rawText = await res.text();
+      let data: any = {};
+      if (contentType.includes('application/json') && rawText) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = { error: 'Phản hồi từ máy chủ không hợp lệ' };
+        }
+      } else if (rawText) {
+        data = { error: rawText };
+      }
+
+      if (!res.ok || data.error) {
+        setError(data.error || 'Đăng ký thất bại');
+        return;
+      }
+
+      setOtpId(String(data.otpId || ''));
+      setOtpCode('');
+      setResendIn(Number(data.expiresIn || 300));
+      setCurrentStep(3);
+
+      if (data.devOtp) {
+        alert(`Mã OTP (môi trường dev): ${data.devOtp}`);
+      } else {
+        alert('Đã gửi mã OTP, vui lòng kiểm tra email.');
+      }
+    } catch {
+      setError('Lỗi kết nối server');
+    } finally {
+      setSendingOtp(false);
+    }
+  };
+
+  const handleVerifyOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (!otpCode || otpCode.length < 6) {
+      setError('Vui lòng nhập mã OTP gồm 6 chữ số');
+      return;
+    }
+
+    if (!otpId) {
+      setError('OTP không hợp lệ. Vui lòng gửi lại mã OTP.');
+      return;
+    }
+
+    try {
+      const res = await fetch(getApiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -70,19 +224,82 @@ export default function RegisterPage() {
           studentCode: formData.studentCode,
           email: formData.email,
           phone: formData.phone,
+          otpId,
+          otpCode,
         }),
       });
-      const data = await res.json();
+
+      const contentType = res.headers.get('content-type') || '';
+      const rawText = await res.text();
+      let data: any = {};
+      if (contentType.includes('application/json') && rawText) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = { error: 'Phản hồi từ máy chủ không hợp lệ' };
+        }
+      } else if (rawText) {
+        data = { error: rawText };
+      }
 
       if (!res.ok || data.error) {
-        setError(data.error || 'Đăng ký thất bại');
+        setError(data.error || 'Xác thực OTP thất bại');
         return;
       }
 
-      alert('Đăng ký thành công! Vui lòng đăng nhập.');
-      navigate('/login');
+      setCurrentStep(4);
     } catch {
       setError('Lỗi kết nối server');
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (resendIn > 0 || sendingOtp) {
+      return;
+    }
+
+    setError('');
+    try {
+      setSendingOtp(true);
+      const res = await fetch(getApiUrl('/api/auth/register/send-otp'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: formData.username,
+          studentCode: formData.studentCode,
+          email: formData.email,
+        }),
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      const rawText = await res.text();
+      let data: any = {};
+      if (contentType.includes('application/json') && rawText) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = { error: 'Phản hồi từ máy chủ không hợp lệ' };
+        }
+      } else if (rawText) {
+        data = { error: rawText };
+      }
+
+      if (!res.ok || data.error) {
+        setError(data.error || 'Không thể gửi lại OTP');
+        return;
+      }
+
+      setOtpId(String(data.otpId || ''));
+      setResendIn(Number(data.expiresIn || 300));
+      if (data.devOtp) {
+        alert(`Mã OTP mới (môi trường dev): ${data.devOtp}`);
+      } else {
+        alert('Đã gửi lại OTP thành công.');
+      }
+    } catch {
+      setError('Lỗi kết nối server');
+    } finally {
+      setSendingOtp(false);
     }
   };
 
@@ -91,9 +308,47 @@ export default function RegisterPage() {
     setCurrentStep(1);
   };
 
+  const handleBackToStep2 = () => {
+    setError('');
+    setCurrentStep(2);
+  };
+
   const handleLoginRedirect = () => {
     navigate('/login');
   };
+
+  useEffect(() => {
+    if (currentStep !== 3 || resendIn <= 0) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setResendIn((prev) => Math.max(0, prev - 1));
+    }, 1000);
+
+    return () => window.clearTimeout(timer);
+  }, [currentStep, resendIn]);
+
+  useEffect(() => {
+    if (currentStep !== 1) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      checkUsernameAvailability(formData.username);
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [formData.username, currentStep]);
+
+  useEffect(() => {
+    if (currentStep !== 1) return;
+    const localUsernameError = validateUsername(formData.username);
+    if (localUsernameError) {
+      setUsernameStatus('idle');
+      setUsernameHint(localUsernameError);
+    }
+  }, [currentStep, formData.username]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-8">
@@ -112,43 +367,50 @@ export default function RegisterPage() {
         </div>
 
         <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
-          {currentStep !== 3 && (
+          {currentStep !== 4 && (
             <>
               <div className="mb-8">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center">
+                  <div className="flex flex-col items-center min-w-[110px] text-center">
                     <div
                       className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                        currentStep >= 1
-                          ? 'bg-[#f79421] text-white'
-                          : 'bg-gray-200 text-gray-500'
+                        currentStep >= 1 ? 'bg-[#f79421] text-white' : 'bg-gray-200 text-gray-500'
                       }`}
                     >
                       1
                     </div>
-                    <span className={currentStep >= 1 ? 'text-[#262262]' : 'text-gray-500'}>
+                    <span className={`mt-2 text-xs ${currentStep >= 1 ? 'text-[#262262]' : 'text-gray-500'}`}>
                       Tài khoản
                     </span>
                   </div>
-                  <div className="flex-1 h-0.5 bg-gray-200 mx-4">
-                    <div
-                      className={`h-full transition-all duration-300 ${
-                        currentStep >= 2 ? 'bg-[#f79421] w-full' : 'bg-gray-200 w-0'
-                      }`}
-                    ></div>
-                  </div>
-                  <div className="flex items-center gap-2">
+
+                  <div className={`flex-1 h-0.5 mx-2 ${currentStep >= 2 ? 'bg-[#f79421]' : 'bg-gray-200'}`}></div>
+
+                  <div className="flex flex-col items-center min-w-[110px] text-center">
                     <div
                       className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                        currentStep >= 2
-                          ? 'bg-[#f79421] text-white'
-                          : 'bg-gray-200 text-gray-500'
+                        currentStep >= 2 ? 'bg-[#f79421] text-white' : 'bg-gray-200 text-gray-500'
                       }`}
                     >
                       2
                     </div>
-                    <span className={currentStep >= 2 ? 'text-[#262262]' : 'text-gray-500'}>
+                    <span className={`mt-2 text-xs ${currentStep >= 2 ? 'text-[#262262]' : 'text-gray-500'}`}>
                       Thông tin cá nhân
+                    </span>
+                  </div>
+
+                  <div className={`flex-1 h-0.5 mx-2 ${currentStep >= 3 ? 'bg-[#f79421]' : 'bg-gray-200'}`}></div>
+
+                  <div className="flex flex-col items-center min-w-[110px] text-center">
+                    <div
+                      className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                        currentStep >= 3 ? 'bg-[#f79421] text-white' : 'bg-gray-200 text-gray-500'
+                      }`}
+                    >
+                      3
+                    </div>
+                    <span className={`mt-2 text-xs ${currentStep >= 3 ? 'text-[#262262]' : 'text-gray-500'}`}>
+                      Xác thực tài khoản
                     </span>
                   </div>
                 </div>
@@ -172,10 +434,23 @@ export default function RegisterPage() {
                   id="username"
                   type="text"
                   value={formData.username}
-                  onChange={(e) => setFormData({...formData, username: e.target.value})}
+                  onChange={(e) => setFormData({...formData, username: normalizeUsername(e.target.value)})}
                   placeholder="Nhập tên đăng nhập"
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f79421] focus:border-transparent"
                 />
+                {!!formData.username.trim() && (
+                  <p
+                    className={`mt-2 text-sm ${
+                      usernameStatus === 'available'
+                        ? 'text-green-600'
+                        : usernameStatus === 'taken' || usernameStatus === 'error'
+                        ? 'text-red-600'
+                        : 'text-gray-500'
+                    }`}
+                  >
+                    {usernameHint}
+                  </p>
+                )}
               </div>
 
               <div className="mb-4">
@@ -234,9 +509,10 @@ export default function RegisterPage() {
 
               <button
                 type="submit"
-                className="w-full bg-[#f79421] hover:bg-[#e68414] text-white py-3 rounded-lg transition-colors"
+                disabled={!canSubmitStep1}
+                className="w-full bg-[#f79421] hover:bg-[#e68414] disabled:bg-gray-300 disabled:cursor-not-allowed text-white py-3 rounded-lg transition-colors"
               >
-                Tiếp theo
+                {usernameStatus === 'checking' ? 'Đang kiểm tra username...' : 'Tiếp theo'}
               </button>
             </form>
           )}
@@ -325,13 +601,72 @@ export default function RegisterPage() {
                   type="submit"
                   className="flex-1 bg-[#f79421] hover:bg-[#e68414] text-white py-3 rounded-lg transition-colors"
                 >
-                  Hoàn tất đăng ký
+                  Tiếp theo
                 </button>
               </div>
             </form>
           )}
 
           {currentStep === 3 && (
+            <form onSubmit={handleVerifyOtpSubmit}>
+              <div className="mb-4">
+                <label htmlFor="otp" className="block mb-2 text-gray-700">
+                  Mã OTP <span className="text-red-500">*</span>
+                </label>
+                <div className="flex justify-center">
+                  <InputOTP
+                    maxLength={6}
+                    value={otpCode}
+                    onChange={(value) => setOtpCode(value.replace(/\D/g, '').slice(0, 6))}
+                    containerClassName="justify-center"
+                  >
+                    <InputOTPGroup>
+                      <InputOTPSlot index={0} className="h-12 w-12 text-base" />
+                      <InputOTPSlot index={1} className="h-12 w-12 text-base" />
+                      <InputOTPSlot index={2} className="h-12 w-12 text-base" />
+                      <InputOTPSlot index={3} className="h-12 w-12 text-base" />
+                      <InputOTPSlot index={4} className="h-12 w-12 text-base" />
+                      <InputOTPSlot index={5} className="h-12 w-12 text-base" />
+                    </InputOTPGroup>
+                  </InputOTP>
+                </div>
+                <p className="mt-2 text-sm text-gray-500">Mã đã gửi đến email: {formData.email}</p>
+              </div>
+
+              <div className="mb-6 flex items-center justify-between">
+                <span className="text-sm text-gray-500">
+                  {resendIn > 0 ? `Gửi lại sau ${resendIn}s` : 'Bạn chưa nhận được mã?'}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleResendOtp}
+                  disabled={resendIn > 0 || sendingOtp}
+                  className="text-sm text-[#262262] disabled:text-gray-400"
+                >
+                  Gửi lại OTP
+                </button>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={handleBackToStep2}
+                  className="px-6 py-3 text-[#262262] hover:bg-gray-50 rounded-lg transition-colors"
+                >
+                  Quay lại
+                </button>
+                <button
+                  type="submit"
+                  disabled={otpCode.length !== 6}
+                  className="flex-1 bg-[#f79421] hover:bg-[#e68414] disabled:bg-gray-300 disabled:cursor-not-allowed text-white py-3 rounded-lg transition-colors"
+                >
+                  Xác nhận OTP
+                </button>
+              </div>
+            </form>
+          )}
+
+          {currentStep === 4 && (
             <div className="text-center py-8">
               <div className="mb-6 flex justify-center">
                 <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center">
