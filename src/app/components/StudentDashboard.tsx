@@ -15,6 +15,7 @@ interface BorrowedBook {
   daysRemaining: number;
   coverColor: string;
   dueDateRaw?: string;
+  extensionCount?: number;
 }
 
 interface OnlineRequest {
@@ -72,6 +73,12 @@ export default function StudentDashboard() {
   };
 
   const getRenewalBlockReason = (book: BorrowedBook) => {
+    // Kiểm tra số lần gia hạn
+    const extensionCount = book.extensionCount || 0;
+    if (extensionCount >= 2) {
+      return 'Đã đạt số lần gia hạn tối đa (2 lần).';
+    }
+
     const daysRemaining = calculateDaysRemaining(book.dueDateRaw || book.dueDate);
     if (daysRemaining < 0) {
       return 'Sách đã quá hạn nên không thể gia hạn.';
@@ -124,6 +131,7 @@ export default function StudentDashboard() {
           : calculateDaysRemaining(borrow.dueDate),
     coverColor: borrow.coverColor || '#262262',
     dueDateRaw: borrow.dueDate,
+    extensionCount: borrow.extensionCount || 0,
   });
 
   const mapPendingRequest = (request: any): OnlineRequest => ({
@@ -551,7 +559,7 @@ export default function StudentDashboard() {
                       className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-[#f79421] text-white rounded-lg hover:bg-[#e67d0f] transition-colors text-sm font-semibold disabled:bg-gray-300 disabled:text-gray-600 disabled:hover:bg-gray-300 disabled:cursor-not-allowed"
                     >
                       <RefreshCw className="w-4 h-4" />
-                      {canRenewBorrow(book) ? 'Gia hạn' : 'Chưa tới hạn'}
+                      {canRenewBorrow(book) ? 'Gia hạn' : `Gia hạn (${book.extensionCount || 0}/2)`}
                     </button>
                   </div>
                 </div>

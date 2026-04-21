@@ -16,6 +16,7 @@ interface BorrowHistory {
   returnDate: string | null;
   fine: number;
   status: 'active' | 'returned' | 'overdue';
+  extensionCount?: number;
 }
 
 export default function StudentHistoryPage() {
@@ -67,6 +68,12 @@ export default function StudentHistoryPage() {
   };
 
   const getRenewalBlockReason = (book: BorrowHistory) => {
+    // Kiểm tra số lần gia hạn
+    const extensionCount = book.extensionCount || 0;
+    if (extensionCount >= 2) {
+      return 'Đã đạt số lần gia hạn tối đa (2 lần).';
+    }
+
     const daysRemaining = calculateDaysRemaining(book.dueDateRaw || book.dueDate);
     if (daysRemaining < 0) {
       return 'Sách đã quá hạn nên không thể gia hạn.';
@@ -129,6 +136,7 @@ export default function StudentHistoryPage() {
 
       return 'active';
     })(),
+    extensionCount: item.extensionCount || 0,
   });
 
   const refreshHistory = async () => {
@@ -506,7 +514,7 @@ export default function StudentHistoryPage() {
                           className="flex items-center gap-2 px-3 py-1.5 bg-[#f79421] text-white rounded-lg hover:bg-[#e67d0f] transition-colors text-sm font-semibold disabled:bg-gray-300 disabled:text-gray-600 disabled:hover:bg-gray-300 disabled:cursor-not-allowed"
                         >
                           <RefreshCw className="w-4 h-4" />
-                          {canRenewBorrow(item) ? 'Gia hạn' : 'Chưa tới hạn'}
+                          {canRenewBorrow(item) ? 'Gia hạn' : `Gia hạn (${item.extensionCount || 0}/2)`}
                         </button>
                       )}
                     </td>
