@@ -230,6 +230,76 @@ const addCalendarDaysWithNonWorkingOffset = (fromDate: Date, calendarDays: numbe
   return clampToWorkingHours(target, settings);
 };
 
+// Calculate pickup deadline for online borrow requests
+// Rules:
+// - If request time <= 10:00: deadline = today 18:30
+// - If 10:00 < request time <= 18:30: deadline = today 18:30
+// - If request time > 18:30:
+//   - If Friday: deadline = Monday 18:30
+//   - If Sunday: deadline = Monday 18:30
+//   - If Saturday: deadline = Monday 18:30
+//   - Otherwise: deadline = next working day 18:30
+const calculatePickupDeadline = (settings: WorkingCalendarSettings): Date => {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon, 5=Fri, 6=Sat
+
+  // If today is a non-working day, deadline = next working day 18:30
+  if (isNonWorkingDay(now, settings.holidayDateSet, settings.closeOnWeekends)) {
+    let deadline = addDays(now, 1);
+    deadline.setHours(settings.workEndHour, settings.workEndMinute, 0, 0);
+
+    while (isNonWorkingDay(deadline, settings.holidayDateSet, settings.closeOnWeekends)) {
+      deadline = addDays(deadline, 1);
+    }
+
+    return deadline;
+  }
+
+  const currentTimeMinutes = currentHour * 60 + currentMinute;
+  const workEndMinutes = settings.workEndHour * 60 + settings.workEndMinute; // 18:30 = 1110 minutes
+
+  // If before 10:00 or between 10:00 and work end time: deadline = today at work end time
+  if (currentTimeMinutes <= workEndMinutes) {
+    const deadline = new Date(now.getFullYear(), now.getMonth(), now.getDate(), settings.workEndHour, settings.workEndMinute, 0, 0);
+    return deadline;
+  }
+
+  // After work end time (after 18:30)
+  // If Friday (5), Sunday (0), or Saturday (6): deadline = Monday 18:30
+  if (dayOfWeek === 5) {
+    // Friday -> Monday (3 days)
+    const deadline = addDays(now, 3);
+    deadline.setHours(settings.workEndHour, settings.workEndMinute, 0, 0);
+    return deadline;
+  }
+
+  if (dayOfWeek === 0) {
+    // Sunday -> Monday (1 day)
+    const deadline = addDays(now, 1);
+    deadline.setHours(settings.workEndHour, settings.workEndMinute, 0, 0);
+    return deadline;
+  }
+
+  if (dayOfWeek === 6) {
+    // Saturday -> Monday (2 days)
+    const deadline = addDays(now, 2);
+    deadline.setHours(settings.workEndHour, settings.workEndMinute, 0, 0);
+    return deadline;
+  }
+
+  // Other weekdays: next day at work end time (skip non-working days)
+  let deadline = addDays(now, 1);
+  deadline.setHours(settings.workEndHour, settings.workEndMinute, 0, 0);
+
+  while (isNonWorkingDay(deadline, settings.holidayDateSet, settings.closeOnWeekends)) {
+    deadline = addDays(deadline, 1);
+  }
+
+  return deadline;
+};
+
 const expireUserPendingRequestsIfNeeded = async (userId: number, policy: ReaderBorrowPolicy) => {
   const now = new Date();
   const expiredPending = await prisma.borrow.findMany({
@@ -453,7 +523,8 @@ router.post('/request', authenticateToken, async (req: any, res: any) => {
     const book = await prisma.book.findUnique({ where: { id: bookId } });
     if (!book || book.availableQty <= 0) return res.status(400).json({ error: 'Sách không khả dụng' });
 
-    const pickupDeadline = addCalendarHoursWithNonWorkingOffset(new Date(), policy.pickupWaitHours, workingCalendar);
+    // Calculate pickup deadline using new business rules
+    const pickupDeadline = calculatePickupDeadline(workingCalendar);
 
     const request = await prisma.borrow.create({
       data: {
