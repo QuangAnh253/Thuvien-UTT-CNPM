@@ -728,4 +728,46 @@ router.get('/:id', authenticateToken, async (req: any, res: any) => {
   }
 });
 
+// 4. HỦY ĐƠN ĐẶT MƯỢN (Sinh viên hủy đơn chưa được duyệt)
+router.delete('/:id/cancel', authenticateToken, async (req: any, res: any) => {
+  try {
+    const borrowId = Number(req.params.id);
+    const userId = req.user.id;
+
+    if (Number.isNaN(borrowId)) {
+      return res.status(400).json({ error: 'ID phiếu mượn không hợp lệ' });
+    }
+
+    // Tìm phiếu mượn cần hủy
+    const borrow = await prisma.borrow.findUnique({
+      where: { id: borrowId },
+      include: { book: true }
+    });
+
+    if (!borrow) {
+      return res.status(404).json({ error: 'Không tìm thấy phiếu mượn' });
+    }
+
+    // Kiểm tra quyền (chỉ sinh viên tự có quyền hủy đơn của mình, hoặc staff)
+    if (borrow.userId !== userId && req.user.role !== 'staff') {
+      return res.status(403).json({ error: 'Bạn không có quyền hủy đơn này' });
+    }
+
+    // Chỉ được hủy phiếu ở trạng thái PENDING
+    if (borrow.status !== 'PENDING') {
+      return res.status(400).json({ error: 'Chỉ có thể hủy phiếu chưa được duyệt' });
+    }
+
+    // Xóa phiếu mượn (từ cơ sở dữ liệu)
+    await prisma.borrow.delete({
+      where: { id: borrowId }
+    });
+
+    res.json({ message: 'Hủy đơn đặt mượn thành công' });
+  } catch (error) {
+    console.error('Error canceling borrow request:', error);
+    res.status(500).json({ error: 'Lỗi khi hủy đơn đặt mượn' });
+  }
+});
+
 export default router;

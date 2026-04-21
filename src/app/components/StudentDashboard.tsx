@@ -324,6 +324,34 @@ export default function StudentDashboard() {
     setRenewalModal({ show: true, book });
   };
 
+  const handleCancelRequest = async (requestId: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn hủy đơn đặt mượn này không?')) {
+      return;
+    }
+
+    try {
+      const res = await apiFetch(`/api/borrow/${requestId}/cancel`, {
+        method: 'DELETE',
+      });
+      
+      if (res.error) {
+        alert(`Lỗi: ${res.error}`);
+        return;
+      }
+
+      alert('Hủy đơn đặt mượn thành công!');
+      
+      // Refresh pending requests list
+      apiFetch('/api/student/pending-requests').then((r) => {
+        const refreshed = extractList(r).map(mapPendingRequest);
+        setOnlineRequests(refreshed);
+      });
+    } catch (error) {
+      alert('Không thể kết nối server');
+      console.error('Error canceling request:', error);
+    }
+  };
+
   const confirmRenewal = async () => {
     if (!renewalModal.book) return;
 
@@ -547,7 +575,18 @@ export default function StudentDashboard() {
                     <h4 className="text-[#262262] font-semibold mb-1">{request.bookTitle}</h4>
                     <p className="text-sm text-gray-600">Yêu cầu: {request.requestDate}</p>
                   </div>
-                  {getStatusBadge(request.status)}
+                  <div className="flex items-center gap-2">
+                    {getStatusBadge(request.status)}
+                    {request.status === 'pending' && (
+                      <button
+                        onClick={() => handleCancelRequest(request.id)}
+                        className="px-3 py-1 text-sm text-red-600 border border-red-300 rounded-lg hover:bg-red-50 transition-colors"
+                        title="Hủy đơn đặt mượn"
+                      >
+                        Hủy
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
