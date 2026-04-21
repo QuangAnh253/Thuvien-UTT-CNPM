@@ -26,7 +26,7 @@ type ReaderBorrowPolicy = {
 const BORROW_POLICIES: Record<'student' | 'lecturer', ReaderBorrowPolicy> = {
   student: {
     label: 'student',
-    maxActiveBorrows: 5,
+    maxActiveBorrows: 3,
     pendingExpiryLockThreshold: 5,
     pickupWaitHours: 24,
     borrowDurationDays: 14,
@@ -35,7 +35,7 @@ const BORROW_POLICIES: Record<'student' | 'lecturer', ReaderBorrowPolicy> = {
   },
   lecturer: {
     label: 'lecturer',
-    maxActiveBorrows: 10,
+    maxActiveBorrows: 5,
     pendingExpiryLockThreshold: 10,
     pickupWaitHours: 48,
     borrowDurationDays: 60,
