@@ -514,7 +514,8 @@ router.put('/:id/approve', authenticateToken, async (req: any, res: any) => {
       return res.status(400).json({ error: 'Yêu cầu mượn đã quá hạn nhận sách' });
     }
 
-    const borrowStartDate = new Date();
+    // Normalize to start of day to avoid timezone-induced date shifts
+    const borrowStartDate = toStartOfDay(new Date());
     const dueDate = addCalendarDaysWithNonWorkingOffset(borrowStartDate, policy.borrowDurationDays, workingCalendar);
 
     const result = await prisma.$transaction([
